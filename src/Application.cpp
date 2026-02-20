@@ -199,8 +199,50 @@ bool Application::SelectPhysicalDevice()
 {
 	ZoneScopedN("SelectPhysicalDevice");
 
+	VkPhysicalDeviceVulkan11Features required11{};
+	required11.shaderDrawParameters = VK_TRUE;
+
+	VkPhysicalDeviceVulkan12Features required12{};
+	required12.bufferDeviceAddress = VK_TRUE;
+	required12.descriptorIndexing = VK_TRUE;
+	required12.runtimeDescriptorArray = VK_TRUE;
+	required12.descriptorBindingPartiallyBound = VK_TRUE;
+	required12.descriptorBindingVariableDescriptorCount = VK_TRUE;
+	required12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+	required12.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
+	required12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+	required12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
+	required12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
+	required12.descriptorBindingUniformTexelBufferUpdateAfterBind = VK_TRUE;
+	required12.descriptorBindingStorageTexelBufferUpdateAfterBind = VK_TRUE;
+	required12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+	required12.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
+	required12.shaderStorageImageArrayNonUniformIndexing = VK_TRUE;
+	required12.shaderUniformBufferArrayNonUniformIndexing = VK_TRUE;
+	required12.shaderUniformTexelBufferArrayNonUniformIndexing = VK_TRUE;
+	required12.shaderStorageTexelBufferArrayNonUniformIndexing = VK_TRUE;
+	required12.timelineSemaphore = VK_TRUE;
+	required12.scalarBlockLayout = VK_TRUE;
+	required12.uniformBufferStandardLayout = VK_TRUE;
+	required12.shaderSubgroupExtendedTypes = VK_TRUE;
+	required12.vulkanMemoryModel = VK_TRUE;
+	required12.vulkanMemoryModelDeviceScope = VK_TRUE;
+	required12.vulkanMemoryModelAvailabilityVisibilityChains = VK_TRUE;
+
+	VkPhysicalDeviceVulkan13Features required13{};
+	required13.dynamicRendering = VK_TRUE;
+	required13.synchronization2 = VK_TRUE;
+	required13.maintenance4 = VK_TRUE;
+	required13.shaderDemoteToHelperInvocation = VK_TRUE;
+
 	vkb::PhysicalDeviceSelector selector(m_VkbInstance);
-	auto physicalDeviceRet = selector.set_surface(m_Surface).set_minimum_version(1, 4).prefer_gpu_device_type(vkb::PreferredDeviceType::discrete).select();
+	auto physicalDeviceRet = selector.set_surface(m_Surface)
+	                               .set_minimum_version(1, 3)
+	                               .set_required_features_11(required11)
+	                               .set_required_features_12(required12)
+	                               .set_required_features_13(required13)
+	                               .prefer_gpu_device_type(vkb::PreferredDeviceType::discrete)
+	                               .select();
 
 	if (!physicalDeviceRet)
 	{
@@ -210,6 +252,32 @@ bool Application::SelectPhysicalDevice()
 
 	m_VkbPhysicalDevice = physicalDeviceRet.value();
 	SDL_Log("Selected GPU: %s", m_VkbPhysicalDevice.properties.deviceName);
+
+#ifdef VK_KHR_fragment_shading_rate
+	VkPhysicalDeviceFragmentShadingRateFeaturesKHR fragmentShadingRateFeatures{};
+	fragmentShadingRateFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR;
+	fragmentShadingRateFeatures.pipelineFragmentShadingRate = VK_TRUE;
+	fragmentShadingRateFeatures.primitiveFragmentShadingRate = VK_TRUE;
+	fragmentShadingRateFeatures.attachmentFragmentShadingRate = VK_TRUE;
+
+	if (m_VkbPhysicalDevice.enable_extension_if_present(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME))
+	{
+		if (m_VkbPhysicalDevice.enable_extension_features_if_present(fragmentShadingRateFeatures))
+		{
+			SDL_Log("Enabled VK_KHR_fragment_shading_rate");
+		}
+		else
+		{
+			SDL_Log("VK_KHR_fragment_shading_rate present but required features are unavailable");
+		}
+	}
+	else
+	{
+		SDL_Log("VK_KHR_fragment_shading_rate not available (continuing without it)");
+	}
+#else
+	SDL_Log("VK_KHR_fragment_shading_rate headers not available (continuing without it)");
+#endif
 
 	return true;
 }

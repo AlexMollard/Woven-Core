@@ -2,6 +2,7 @@
 
 // Standard Library
 #include <cstdint>
+#include <cstdio>
 #include <iostream>
 #include <memory>
 #include <string>

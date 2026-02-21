@@ -8,6 +8,7 @@
 #include <VkBootstrap.h>
 
 #include "Application.hpp"
+#include "Logger.hpp"
 
 Application::Application()
 {
@@ -21,6 +22,8 @@ bool Application::Init()
 {
 	ZoneScoped;
 
+	Logger::Init();
+
 	if (!InitMemoryAllocator())
 		return false;
 
@@ -33,7 +36,7 @@ bool Application::Init()
 	if (!InitPhysics())
 		return false;
 
-	SDL_Log("Application initialized successfully!");
+	Logger::Info("Application initialized successfully!");
 	return true;
 }
 
@@ -63,7 +66,7 @@ void Application::Shutdown()
 
 	// Print memory statistics
 	mi_stats_print(nullptr);
-	SDL_Log("Application shutdown complete.");
+	Logger::Shutdown();
 }
 
 // --- Initialization Helpers ---
@@ -71,8 +74,8 @@ void Application::Shutdown()
 bool Application::InitMemoryAllocator()
 {
 	mi_version();
-	SDL_Log("mimalloc initialized (tracking enabled in debug builds)");
-	SDL_Log("Tracy profiler enabled (connect with Tracy Profiler GUI)");
+	Logger::Debug("mimalloc initialized (tracking enabled in debug builds)");
+	Logger::Debug("Tracy profiler enabled (connect with Tracy Profiler GUI)");
 	return true;
 }
 
@@ -80,17 +83,18 @@ bool Application::InitSDL()
 {
 	if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
 	{
-		SDL_Log("Failed to initialize SDL: %s", SDL_GetError());
+		Logger::Error("Failed to initialize SDL: %s", SDL_GetError());
 		return false;
 	}
 
 	m_Window = SDL_CreateWindow("Woven Core", 1920, 1080, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
 	if (!m_Window)
 	{
-		SDL_Log("Failed to create window: %s", SDL_GetError());
+		Logger::Error("Failed to create window: %s", SDL_GetError());
 		return false;
 	}
 
+	Logger::Info("SDL initialized (1920x1080, Vulkan)");
 	return true;
 }
 
@@ -101,7 +105,7 @@ bool Application::InitVulkan()
 	// Initialize Volk
 	if (volkInitialize() != VK_SUCCESS)
 	{
-		SDL_Log("Failed to initialize Volk. Is Vulkan installed?");
+		Logger::Error("Failed to initialize Volk. Is Vulkan installed?");
 		return false;
 	}
 
@@ -126,7 +130,7 @@ bool Application::InitVulkan()
 bool Application::InitPhysics()
 {
 	JPH::RegisterDefaultAllocator();
-	SDL_Log("Jolt Physics initialized");
+	Logger::Debug("Jolt Physics initialized");
 	return true;
 }
 
@@ -141,29 +145,48 @@ bool Application::CreateVulkanInstance()
 	const char* const* extensions = SDL_Vulkan_GetInstanceExtensions(&extCount);
 	if (!extensions)
 	{
-		SDL_Log("Failed to get Vulkan extensions from SDL");
+		Logger::Error("Failed to get Vulkan extensions from SDL");
 		return false;
 	}
 
 	// Build instance
 	vkb::InstanceBuilder instanceBuilder;
-	auto instanceRet = instanceBuilder.set_app_name("Woven Core")
-	                           .set_engine_name("Woven Engine")
-	                           .require_api_version(1, 4, 325)
-	                           .enable_extensions(extCount, extensions)
-	                           .enable_validation_layers(true)
-	                           .use_default_debug_messenger()
-	                           .set_debug_callback(
-	                                   [](VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT type, const VkDebugUtilsMessengerCallbackDataEXT* data, void* userData) -> VkBool32
-	                                   {
-		                                   SDL_Log("[Vulkan] %s", data->pMessage);
-		                                   return VK_FALSE;
-	                                   })
-	                           .build();
+	instanceBuilder.set_app_name("Woven Core").set_engine_name("Woven Engine").require_api_version(1, 3, 0).enable_extensions(extCount, extensions);
+
+#ifndef NDEBUG
+	// Debug builds: enhanced validation with best practices and synchronization checks
+	instanceBuilder.request_validation_layers(true)
+	        .use_default_debug_messenger()
+	        .set_debug_callback(
+	                [](VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT type, const VkDebugUtilsMessengerCallbackDataEXT* data, void* userData) -> VkBool32
+	                {
+		                if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+			                Logger::VulkanError(data->pMessage);
+		                else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+			                Logger::VulkanWarning(data->pMessage);
+		                else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)
+			                Logger::VulkanInfo(data->pMessage);
+
+		                return VK_FALSE;
+	                })
+	        .set_debug_messenger_severity(VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+	        .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
+	        .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT)
+	        .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT)
+	        .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT)
+	        .add_validation_feature_disable(VK_VALIDATION_FEATURE_DISABLE_CORE_CHECKS_EXT);
+
+	Logger::Info("Validation: GPU-Assisted + Sync + Best Practices + Debug Printf");
+#else
+	// Release builds: no validation overhead
+	Logger::Info("Validation layers disabled (Release build)");
+#endif
+
+	auto instanceRet = instanceBuilder.build();
 
 	if (!instanceRet)
 	{
-		SDL_Log("Failed to create Vulkan Instance: %s", instanceRet.error().message().c_str());
+		Logger::Error("Failed to create Vulkan Instance: %s", instanceRet.error().message().c_str());
 		return false;
 	}
 
@@ -175,7 +198,7 @@ bool Application::CreateVulkanInstance()
 	uint32_t major = VK_VERSION_MAJOR(apiVersion);
 	uint32_t minor = VK_VERSION_MINOR(apiVersion);
 	uint32_t patch = VK_VERSION_PATCH(apiVersion);
-	SDL_Log("Vulkan Instance created (API %u.%u.%u)", major, minor, patch);
+	Logger::Info("Vulkan Instance (API %u.%u.%u)", major, minor, patch);
 
 	return true;
 }
@@ -187,7 +210,7 @@ bool Application::CreateSurface()
 	VkSurfaceKHR tempSurface = VK_NULL_HANDLE;
 	if (!SDL_Vulkan_CreateSurface(m_Window, m_VkbInstance.instance, nullptr, &tempSurface))
 	{
-		SDL_Log("Failed to create Vulkan Surface: %s", SDL_GetError());
+		Logger::Error("Failed to create Vulkan Surface: %s", SDL_GetError());
 		return false;
 	}
 
@@ -236,22 +259,16 @@ bool Application::SelectPhysicalDevice()
 	required13.shaderDemoteToHelperInvocation = VK_TRUE;
 
 	vkb::PhysicalDeviceSelector selector(m_VkbInstance);
-	auto physicalDeviceRet = selector.set_surface(m_Surface)
-	                               .set_minimum_version(1, 3)
-	                               .set_required_features_11(required11)
-	                               .set_required_features_12(required12)
-	                               .set_required_features_13(required13)
-	                               .prefer_gpu_device_type(vkb::PreferredDeviceType::discrete)
-	                               .select();
+	auto physicalDeviceRet = selector.set_surface(m_Surface).set_minimum_version(1, 3).set_required_features_11(required11).set_required_features_12(required12).set_required_features_13(required13).prefer_gpu_device_type(vkb::PreferredDeviceType::discrete).select();
 
 	if (!physicalDeviceRet)
 	{
-		SDL_Log("Failed to select Physical Device: %s", physicalDeviceRet.error().message().c_str());
+		Logger::Error("Failed to select Physical Device: %s", physicalDeviceRet.error().message().c_str());
 		return false;
 	}
 
 	m_VkbPhysicalDevice = physicalDeviceRet.value();
-	SDL_Log("Selected GPU: %s", m_VkbPhysicalDevice.properties.deviceName);
+	Logger::Info("Selected GPU: %s", m_VkbPhysicalDevice.properties.deviceName);
 
 #ifdef VK_KHR_fragment_shading_rate
 	VkPhysicalDeviceFragmentShadingRateFeaturesKHR fragmentShadingRateFeatures{};
@@ -264,19 +281,19 @@ bool Application::SelectPhysicalDevice()
 	{
 		if (m_VkbPhysicalDevice.enable_extension_features_if_present(fragmentShadingRateFeatures))
 		{
-			SDL_Log("Enabled VK_KHR_fragment_shading_rate");
+			Logger::Info("Enabled VK_KHR_fragment_shading_rate");
 		}
 		else
 		{
-			SDL_Log("VK_KHR_fragment_shading_rate present but required features are unavailable");
+			Logger::Warning("VK_KHR_fragment_shading_rate present but features unavailable");
 		}
 	}
 	else
 	{
-		SDL_Log("VK_KHR_fragment_shading_rate not available (continuing without it)");
+		Logger::Debug("VK_KHR_fragment_shading_rate not available");
 	}
 #else
-	SDL_Log("VK_KHR_fragment_shading_rate headers not available (continuing without it)");
+	Logger::Debug("VK_KHR_fragment_shading_rate headers not available");
 #endif
 
 	return true;
@@ -291,7 +308,7 @@ bool Application::CreateLogicalDevice()
 
 	if (!deviceRet)
 	{
-		SDL_Log("Failed to create Vulkan Device: %s", deviceRet.error().message().c_str());
+		Logger::Error("Failed to create Vulkan Device: %s", deviceRet.error().message().c_str());
 		return false;
 	}
 
@@ -310,13 +327,13 @@ bool Application::GetQueues()
 
 	if (!graphicsQueueRet || !presentQueueRet)
 	{
-		SDL_Log("Failed to get device queues");
+		Logger::Error("Failed to get device queues");
 		return false;
 	}
 
 	m_GraphicsQueue = graphicsQueueRet.value();
 	m_PresentQueue = presentQueueRet.value();
-	SDL_Log("Vulkan Device and Queues created successfully!");
+	Logger::Info("Vulkan Device and Queues ready");
 
 	return true;
 }

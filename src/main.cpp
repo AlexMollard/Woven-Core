@@ -24,6 +24,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
 // SDL3 Callback: Frame
 SDL_AppResult SDL_AppIterate(void* appstate)
 {
+	ZoneScoped; // Trace SDL callback
 	auto* app = static_cast<Application*>(appstate);
 	app->Update();
 
@@ -33,6 +34,7 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 // SDL3 Callback: Events
 SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
 {
+	ZoneScoped; // Trace event handling
 	auto* app = static_cast<Application*>(appstate);
 
 	if (event->type == SDL_EVENT_QUIT)
@@ -47,6 +49,7 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
 // SDL3 Callback: Cleanup
 void SDL_AppQuit(void* appstate, SDL_AppResult result)
 {
+	ZoneScoped; // Trace cleanup
 	auto* app = static_cast<Application*>(appstate);
 	app->Shutdown();
 	delete app;

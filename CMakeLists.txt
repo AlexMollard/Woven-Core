@@ -153,19 +153,7 @@ if(NOT TARGET vk-bootstrap::vk-bootstrap AND TARGET vk-bootstrap)
     add_library(vk-bootstrap::vk-bootstrap ALIAS vk-bootstrap)
 endif()
 
-# 9. mimalloc (High-Performance Memory Allocator with Leak Detection)
-CPMAddPackage(
-    NAME mimalloc
-    GIT_REPOSITORY https://github.com/microsoft/mimalloc.git
-    GIT_TAG v3.2.8
-    OPTIONS 
-        "MI_BUILD_SHARED OFF"
-        "MI_BUILD_STATIC ON"
-        "MI_BUILD_TESTS OFF"
-        "MI_DEBUG_FULL ON"  # Enable full debug info in debug builds
-)
-
-# 10. Tracy Profiler
+# 9. Tracy Profiler (Full Integration: CPU, GPU, Memory, Callstacks)
 CPMAddPackage(
     NAME tracy
     GIT_REPOSITORY https://github.com/wolfpld/tracy.git
@@ -176,6 +164,9 @@ CPMAddPackage(
         "TRACY_NO_BROADCAST OFF"
         "TRACY_ONLY_LOCALHOST OFF"
         "TRACY_ONLY_IPV4 OFF"
+        "TRACY_CALLSTACK ON"           # Enable call stack capture
+        "TRACY_NO_FRAME_IMAGE OFF"     # Allow frame capture
+        "TRACY_NO_SAMPLING OFF"        # Enable sampling profiler
 )
 
 # --- Executable Target ---
@@ -196,8 +187,9 @@ target_compile_definitions(WovenCore PRIVATE
     GLM_FORCE_LEFT_HANDED
     GLM_FORCE_RADIANS
     JPH_PROFILE_ENABLED
-    MI_TRACK_ENABLED=1  # Enable allocation tracking
-    TRACY_ENABLE  # Enable Tracy profiling
+    TRACY_ENABLE              # Enable Tracy profiling
+    TRACY_CALLSTACK=8         # Capture 8 levels of callstack
+    TRACY_VK_USE_SYMBOL_TABLE # Enable Vulkan symbol resolution
 )
 
 # Explicitly add include directories for dependencies that may not properly export them
@@ -209,10 +201,16 @@ target_include_directories(WovenCore PRIVATE
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     target_compile_definitions(WovenCore PRIVATE JPH_DEBUG_RENDERER=0)
 else()
-    target_compile_definitions(WovenCore PRIVATE 
-        JPH_DEBUG_RENDERER=1
-        MI_SHOW_ERRORS=1  # Show memory errors in debug
-    )
+    target_compile_definitions(WovenCore PRIVATE JPH_DEBUG_RENDERER=1)
+    # Enhanced debug info for Tracy callstack resolution
+    if(MSVC)
+        target_compile_options(WovenCore PRIVATE 
+            /Zi          # Full debug info
+            /Ob0         # Disable inline expansion for better callstacks
+            /Od          # Disable optimizations
+        )
+        target_link_options(WovenCore PRIVATE /DEBUG:FULL)
+    endif()
 endif()
 
 target_link_libraries(WovenCore PRIVATE
@@ -224,7 +222,6 @@ target_link_libraries(WovenCore PRIVATE
     fastgltf::fastgltf
     enkiTS::enkiTS
     Jolt
-    mimalloc-static
     TracyClient
     Vulkan::Vulkan
 )

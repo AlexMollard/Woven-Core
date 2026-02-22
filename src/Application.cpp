@@ -5,6 +5,7 @@
 
 // Vulkan stuff must be included after Volk
 #include <SDL3/SDL_vulkan.h>
+#include <tracy/TracyVulkan.hpp>
 #include <VkBootstrap.h>
 
 #include "Application.hpp"
@@ -24,9 +25,6 @@ bool Application::Init()
 
 	Logger::Init();
 
-	if (!InitMemoryAllocator())
-		return false;
-
 	if (!InitSDL())
 		return false;
 
@@ -44,6 +42,12 @@ void Application::Update()
 {
 	ZoneScoped;
 	FrameMark;
+
+	// Collect GPU profiling data
+	if (m_TracyContext)
+	{
+		TracyVkCollect(m_TracyContext, m_TracyCommandBuffer);
+	}
 
 	// TODO: Update physics
 	// TODO: Record command buffers
@@ -64,20 +68,10 @@ void Application::Shutdown()
 
 	SDL_Quit();
 
-	// Print memory statistics
-	mi_stats_print(nullptr);
 	Logger::Shutdown();
 }
 
 // --- Initialization Helpers ---
-
-bool Application::InitMemoryAllocator()
-{
-	mi_version();
-	Logger::Debug("mimalloc initialized (tracking enabled in debug builds)");
-	Logger::Debug("Tracy profiler enabled (connect with Tracy Profiler GUI)");
-	return true;
-}
 
 bool Application::InitSDL()
 {
@@ -124,12 +118,15 @@ bool Application::InitVulkan()
 	if (!GetQueues())
 		return false;
 
+	if (!CreateTracyContext())
+		return false;
+
 	return true;
 }
 
 bool Application::InitPhysics()
 {
-	JPH::RegisterDefaultAllocator();
+	JPH::RegisterDefaultAllocator(); // TODO: Fix Jolt linking
 	Logger::Debug("Jolt Physics initialized");
 	return true;
 }
@@ -338,6 +335,51 @@ bool Application::GetQueues()
 	return true;
 }
 
+bool Application::CreateTracyContext()
+{
+	ZoneScopedN("CreateTracyContext");
+
+	// Create command pool for Tracy
+	VkCommandPoolCreateInfo poolInfo{};
+	poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+	poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+	poolInfo.queueFamilyIndex = m_VkbDevice.get_queue_index(vkb::QueueType::graphics).value();
+
+	if (vkCreateCommandPool(m_VkbDevice.device, &poolInfo, nullptr, &m_TracyCommandPool) != VK_SUCCESS)
+	{
+		Logger::Error("Failed to create Tracy command pool");
+		return false;
+	}
+
+	// Allocate command buffer for Tracy
+	VkCommandBufferAllocateInfo allocInfo{};
+	allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+	allocInfo.commandPool = m_TracyCommandPool;
+	allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	allocInfo.commandBufferCount = 1;
+
+	if (vkAllocateCommandBuffers(m_VkbDevice.device, &allocInfo, &m_TracyCommandBuffer) != VK_SUCCESS)
+	{
+		Logger::Error("Failed to allocate Tracy command buffer");
+		return false;
+	}
+
+	// Create Tracy Vulkan context
+	m_TracyContext = TracyVkContextCalibrated(m_VkbInstance.instance, m_VkbPhysicalDevice.physical_device, m_VkbDevice.device, m_GraphicsQueue, m_TracyCommandBuffer, vkGetInstanceProcAddr, vkGetDeviceProcAddr);
+
+	if (!m_TracyContext)
+	{
+		Logger::Error("Failed to create Tracy GPU context");
+		return false;
+	}
+
+	// Name the context for clarity in Tracy UI
+	TracyVkContextName(m_TracyContext, "Vulkan Main Context", 21);
+
+	Logger::Info("Tracy GPU profiling initialized");
+	return true;
+}
+
 // --- Cleanup Helpers ---
 
 void Application::CleanupVulkan()
@@ -347,6 +389,22 @@ void Application::CleanupVulkan()
 	if (m_VkbDevice.device != VK_NULL_HANDLE)
 	{
 		vkDeviceWaitIdle(m_VkbDevice.device);
+
+		// Destroy Tracy context
+		if (m_TracyContext)
+		{
+			TracyVkDestroy(m_TracyContext);
+			m_TracyContext = nullptr;
+		}
+
+		// Destroy Tracy command resources
+		if (m_TracyCommandPool != VK_NULL_HANDLE)
+		{
+			vkDestroyCommandPool(m_VkbDevice.device, m_TracyCommandPool, nullptr);
+			m_TracyCommandPool = VK_NULL_HANDLE;
+			m_TracyCommandBuffer = VK_NULL_HANDLE;
+		}
+
 		vkb::destroy_device(m_VkbDevice);
 	}
 

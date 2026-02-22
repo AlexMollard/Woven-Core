@@ -18,7 +18,6 @@ This project is for my learning and experimentation with modern graphics program
 | **Vulkan Setup** | **vk-bootstrap** | Simplifies instance, device, and queue creation with error handling. |
 | **Vulkan Loader** | **Volk** | Meta-loader for Vulkan with per-device function pointers. |
 | **GPU Memory** | **VMA** | Industry standard for GPU memory virtualization. |
-| **CPU Memory** | **mimalloc** | High-performance allocator with leak detection and tracking. |
 | **Assets** | **fastgltf** | C++20 SIMD-optimized glTF loader (20x faster than tinygltf). |
 | **Physics** | **Jolt Physics** | Multi-threaded, double-precision physics engine used in AAA. |
 | **Tasks** | **enkiTS** | Lightweight, lock-free task scheduler for job-based parallelism. |

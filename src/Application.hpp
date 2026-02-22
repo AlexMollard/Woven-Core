@@ -5,6 +5,12 @@
 // Volk must be included before VkBootstrap and Vulkan headers
 #include <VkBootstrap.h>
 
+// Forward declare Tracy context
+namespace tracy
+{
+	class VkCtx;
+}
+
 class Application
 {
 public:
@@ -34,7 +40,6 @@ public:
 
 private:
 	// Initialization helpers
-	bool InitMemoryAllocator();
 	bool InitSDL();
 	bool InitVulkan();
 	bool InitPhysics();
@@ -45,6 +50,7 @@ private:
 	bool SelectPhysicalDevice();
 	bool CreateLogicalDevice();
 	bool GetQueues();
+	bool CreateTracyContext();
 
 	// Cleanup helpers
 	void CleanupVulkan();
@@ -62,4 +68,9 @@ private:
 	VkSurfaceKHR m_Surface = VK_NULL_HANDLE;
 	VkQueue m_GraphicsQueue = VK_NULL_HANDLE;
 	VkQueue m_PresentQueue = VK_NULL_HANDLE;
+
+	// Tracy GPU Profiling
+	tracy::VkCtx* m_TracyContext = nullptr;
+	VkCommandPool m_TracyCommandPool = VK_NULL_HANDLE;
+	VkCommandBuffer m_TracyCommandBuffer = VK_NULL_HANDLE;
 };

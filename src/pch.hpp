@@ -14,7 +14,6 @@
 // Third Party
 #include <glm/glm.hpp>
 #include <Jolt/Jolt.h>
-#include <mimalloc.h>
 
-// Tracy Profiler
+// Tracy Profiler (must be last to capture everything)
 #include <tracy/Tracy.hpp>

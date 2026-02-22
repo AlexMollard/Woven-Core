@@ -14,6 +14,7 @@
 // Third Party
 #include <glm/glm.hpp>
 #include <Jolt/Jolt.h>
+#include <TaskScheduler.h>
 
 // Tracy Profiler (must be last to capture everything)
 #include <tracy/Tracy.hpp>

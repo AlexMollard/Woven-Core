@@ -34,6 +34,9 @@ bool Application::Init()
 	if (!InitPhysics())
 		return false;
 
+	if (!InitTaskScheduler())
+		return false;
+
 	Logger::Info("Application initialized successfully!");
 	return true;
 }
@@ -42,6 +45,14 @@ void Application::Update()
 {
 	ZoneScoped;
 	FrameMark;
+
+	// Schedule physics tasks
+	if (m_TaskScheduler.GetNumTaskThreads() > 0)
+	{
+		ZoneScopedN("Physics Tasks");
+		// TODO: Create physics update tasks and add to scheduler
+		// m_TaskScheduler.WaitforAll();
+	}
 
 	// Collect GPU profiling data
 	if (m_TracyContext)
@@ -57,6 +68,9 @@ void Application::Update()
 void Application::Shutdown()
 {
 	ZoneScoped;
+
+	// Wait for any pending tasks
+	m_TaskScheduler.WaitforAll();
 
 	CleanupVulkan();
 
@@ -126,8 +140,21 @@ bool Application::InitVulkan()
 
 bool Application::InitPhysics()
 {
-	JPH::RegisterDefaultAllocator(); // TODO: Fix Jolt linking
+	ZoneScopedN("InitPhysics");
+	JPH::RegisterDefaultAllocator();
 	Logger::Debug("Jolt Physics initialized");
+	return true;
+}
+
+bool Application::InitTaskScheduler()
+{
+	ZoneScopedN("InitTaskScheduler");
+
+	enki::TaskSchedulerConfig config;
+	m_TaskScheduler.Initialize(config);
+
+	uint32_t numThreads = m_TaskScheduler.GetNumTaskThreads();
+	Logger::Info("Task Scheduler initialized with %u worker threads", numThreads);
 	return true;
 }
 

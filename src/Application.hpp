@@ -43,6 +43,7 @@ private:
 	bool InitSDL();
 	bool InitVulkan();
 	bool InitPhysics();
+	bool InitTaskScheduler();
 
 	// Vulkan initialization steps
 	bool CreateVulkanInstance();
@@ -73,4 +74,7 @@ private:
 	tracy::VkCtx* m_TracyContext = nullptr;
 	VkCommandPool m_TracyCommandPool = VK_NULL_HANDLE;
 	VkCommandBuffer m_TracyCommandBuffer = VK_NULL_HANDLE;
+
+	// Task Scheduling (enkiTS)
+	enki::TaskScheduler m_TaskScheduler;
 };

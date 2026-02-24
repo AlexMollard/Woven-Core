@@ -8,107 +8,20 @@
 #include <tracy/TracyVulkan.hpp>
 #include <VkBootstrap.h>
 
-#include "Application.hpp"
-#include "Logger.hpp"
+#include "core/Logger.hpp"
+#include "GraphicsSystem.hpp"
 
-Application::Application()
+GraphicsSystem::GraphicsSystem()
 {
 }
 
-Application::~Application()
+GraphicsSystem::~GraphicsSystem()
 {
 }
 
-bool Application::Init()
+bool GraphicsSystem::Initialize(SDL_Window* window)
 {
-	ZoneScoped;
-
-	Logger::Init();
-
-	if (!InitSDL())
-		return false;
-
-	if (!InitVulkan())
-		return false;
-
-	if (!InitPhysics())
-		return false;
-
-	if (!InitTaskScheduler())
-		return false;
-
-	Logger::Info("Application initialized successfully!");
-	return true;
-}
-
-void Application::Update()
-{
-	ZoneScoped;
-	FrameMark;
-
-	// Schedule physics tasks
-	if (m_TaskScheduler.GetNumTaskThreads() > 0)
-	{
-		ZoneScopedN("Physics Tasks");
-		// TODO: Create physics update tasks and add to scheduler
-		// m_TaskScheduler.WaitforAll();
-	}
-
-	// Collect GPU profiling data
-	if (m_TracyContext)
-	{
-		TracyVkCollect(m_TracyContext, m_TracyCommandBuffer);
-	}
-
-	// TODO: Update physics
-	// TODO: Record command buffers
-	// TODO: Present
-}
-
-void Application::Shutdown()
-{
-	ZoneScoped;
-
-	// Wait for any pending tasks
-	m_TaskScheduler.WaitforAll();
-
-	CleanupVulkan();
-
-	if (m_Window)
-	{
-		SDL_DestroyWindow(m_Window);
-		m_Window = nullptr;
-	}
-
-	SDL_Quit();
-
-	Logger::Shutdown();
-}
-
-// --- Initialization Helpers ---
-
-bool Application::InitSDL()
-{
-	if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
-	{
-		Logger::Error("Failed to initialize SDL: %s", SDL_GetError());
-		return false;
-	}
-
-	m_Window = SDL_CreateWindow("Woven Core", 1920, 1080, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
-	if (!m_Window)
-	{
-		Logger::Error("Failed to create window: %s", SDL_GetError());
-		return false;
-	}
-
-	Logger::Info("SDL initialized (1920x1080, Vulkan)");
-	return true;
-}
-
-bool Application::InitVulkan()
-{
-	ZoneScopedN("InitVulkan");
+	ZoneScopedN("GraphicsSystem::Initialize");
 
 	// Initialize Volk
 	if (volkInitialize() != VK_SUCCESS)
@@ -117,10 +30,10 @@ bool Application::InitVulkan()
 		return false;
 	}
 
-	if (!CreateVulkanInstance())
+	if (!CreateVulkanInstance(window))
 		return false;
 
-	if (!CreateSurface())
+	if (!CreateSurface(window))
 		return false;
 
 	if (!SelectPhysicalDevice())
@@ -141,29 +54,23 @@ bool Application::InitVulkan()
 	return true;
 }
 
-bool Application::InitPhysics()
+void GraphicsSystem::Shutdown()
 {
-	ZoneScopedN("InitPhysics");
-	JPH::RegisterDefaultAllocator();
-	Logger::Debug("Jolt Physics initialized");
-	return true;
+	ZoneScopedN("GraphicsSystem::Shutdown");
+	CleanupVulkan();
 }
 
-bool Application::InitTaskScheduler()
+void GraphicsSystem::UpdateProfiler()
 {
-	ZoneScopedN("InitTaskScheduler");
-
-	enki::TaskSchedulerConfig config;
-	m_TaskScheduler.Initialize(config);
-
-	uint32_t numThreads = m_TaskScheduler.GetNumTaskThreads();
-	Logger::Info("Task Scheduler initialized with %u worker threads", numThreads);
-	return true;
+	if (m_TracyContext)
+	{
+		TracyVkCollect(m_TracyContext, m_TracyCommandBuffer);
+	}
 }
 
 // --- Vulkan Initialization Steps ---
 
-bool Application::CreateVulkanInstance()
+bool GraphicsSystem::CreateVulkanInstance(SDL_Window* window)
 {
 	ZoneScopedN("CreateVulkanInstance");
 
@@ -230,12 +137,12 @@ bool Application::CreateVulkanInstance()
 	return true;
 }
 
-bool Application::CreateSurface()
+bool GraphicsSystem::CreateSurface(SDL_Window* window)
 {
 	ZoneScopedN("CreateSurface");
 
 	VkSurfaceKHR tempSurface = VK_NULL_HANDLE;
-	if (!SDL_Vulkan_CreateSurface(m_Window, m_VkbInstance.instance, nullptr, &tempSurface))
+	if (!SDL_Vulkan_CreateSurface(window, m_VkbInstance.instance, nullptr, &tempSurface))
 	{
 		Logger::Error("Failed to create Vulkan Surface: %s", SDL_GetError());
 		return false;
@@ -245,7 +152,7 @@ bool Application::CreateSurface()
 	return true;
 }
 
-bool Application::SelectPhysicalDevice()
+bool GraphicsSystem::SelectPhysicalDevice()
 {
 	ZoneScopedN("SelectPhysicalDevice");
 
@@ -334,7 +241,7 @@ bool Application::SelectPhysicalDevice()
 	return true;
 }
 
-bool Application::CreateLogicalDevice()
+bool GraphicsSystem::CreateLogicalDevice()
 {
 	ZoneScopedN("CreateLogicalDevice");
 
@@ -353,7 +260,7 @@ bool Application::CreateLogicalDevice()
 	}
 }
 
-bool Application::GetQueues()
+bool GraphicsSystem::GetQueues()
 {
 	ZoneScopedN("GetQueues");
 
@@ -379,7 +286,7 @@ bool Application::GetQueues()
 	}
 }
 
-bool Application::InitializeVulkanMemoryAllocator()
+bool GraphicsSystem::InitializeVulkanMemoryAllocator()
 {
 	ZoneScopedN("InitializeVulkanMemoryAllocator");
 
@@ -412,7 +319,7 @@ bool Application::InitializeVulkanMemoryAllocator()
 	return true;
 }
 
-bool Application::CreateTracyContext()
+bool GraphicsSystem::CreateTracyContext()
 {
 	ZoneScopedN("CreateTracyContext");
 
@@ -459,7 +366,7 @@ bool Application::CreateTracyContext()
 
 // --- Cleanup Helpers ---
 
-void Application::CleanupVulkan()
+void GraphicsSystem::CleanupVulkan()
 {
 	ZoneScopedN("CleanupVulkan");
 

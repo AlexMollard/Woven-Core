@@ -42,6 +42,8 @@ Cpp11BracedListStyle: false
 DeriveLineEnding: true
 EmptyLineBeforeAccessModifier: Always
 IncludeCategories:
+  - Regex: '^"pch\.hpp"'
+    Priority: 0
   - Regex: '^<.*'
     Priority: 1
   - Regex: '^".*'

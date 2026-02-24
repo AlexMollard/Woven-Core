@@ -1,9 +1,9 @@
 #pragma once
 
+#include "pch.hpp"
+
 #include <vk_mem_alloc.h>
 #include <VkBootstrap.h>
-
-#include "pch.hpp"
 
 // Forward declare Tracy context
 namespace tracy
@@ -11,43 +11,68 @@ namespace tracy
 	class VkCtx;
 }
 
-class Application
+class GraphicsSystem
 {
 public:
-	Application();
-	~Application();
+	GraphicsSystem();
+	~GraphicsSystem();
 
-	// Lifecycle methods
-	bool Init();
-	void Update();
+	bool Initialize(SDL_Window* window);
 	void Shutdown();
 
 	// Accessors
-	SDL_Window* GetWindow() const
+	VkInstance GetInstance() const
 	{
-		return m_Window;
+		return m_VkbInstance.instance;
 	}
 
-	bool ShouldClose() const
+	VkPhysicalDevice GetPhysicalDevice() const
 	{
-		return m_ShouldClose;
+		return m_VkbPhysicalDevice.physical_device;
 	}
 
-	void RequestClose()
+	VkDevice GetDevice() const
 	{
-		m_ShouldClose = true;
+		return m_VkbDevice.device;
 	}
+
+	VkSurfaceKHR GetSurface() const
+	{
+		return m_Surface;
+	}
+
+	VkQueue GetGraphicsQueue() const
+	{
+		return m_GraphicsQueue;
+	}
+
+	VkQueue GetPresentQueue() const
+	{
+		return m_PresentQueue;
+	}
+
+	VmaAllocator GetAllocator() const
+	{
+		return m_VmaAllocator;
+	}
+
+	tracy::VkCtx* GetTracyContext() const
+	{
+		return m_TracyContext;
+	}
+
+	VkCommandBuffer GetTracyCommandBuffer() const
+	{
+		return m_TracyCommandBuffer;
+	}
+
+	// Profiling
+	void UpdateProfiler();
 
 private:
 	// Initialization helpers
-	bool InitSDL();
-	bool InitVulkan();
-	bool InitPhysics();
-	bool InitTaskScheduler();
-
-	// Vulkan initialization steps
-	bool CreateVulkanInstance();
-	bool CreateSurface();
+	bool CreateVulkanInstance(SDL_Window* window);
+	bool CreateSurface(SDL_Window* window);
 	bool SelectPhysicalDevice();
 	bool CreateLogicalDevice();
 	bool GetQueues();
@@ -58,10 +83,6 @@ private:
 	void CleanupVulkan();
 
 private:
-	// SDL
-	SDL_Window* m_Window = nullptr;
-	bool m_ShouldClose = false;
-
 	// Vulkan Core
 	vkb::Instance m_VkbInstance;
 	vkb::PhysicalDevice m_VkbPhysicalDevice;
@@ -78,7 +99,4 @@ private:
 	tracy::VkCtx* m_TracyContext = nullptr;
 	VkCommandPool m_TracyCommandPool = VK_NULL_HANDLE;
 	VkCommandBuffer m_TracyCommandBuffer = VK_NULL_HANDLE;
-
-	// Task Scheduling (enkiTS)
-	enki::TaskScheduler m_TaskScheduler;
 };

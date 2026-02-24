@@ -49,13 +49,13 @@ void operator delete[](void* ptr) noexcept
 	free(ptr);
 }
 
-void operator delete(void* ptr, std::size_t) noexcept
+void operator delete(void* ptr, std::size_t size) noexcept
 {
 	TracyFreeS(ptr, 10);
 	free(ptr);
 }
 
-void operator delete[](void* ptr, std::size_t) noexcept
+void operator delete[](void* ptr, std::size_t size) noexcept
 {
 	TracyFreeS(ptr, 10);
 	free(ptr);

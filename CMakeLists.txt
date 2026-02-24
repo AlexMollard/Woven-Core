@@ -175,11 +175,20 @@ file(GLOB_RECURSE WOVENCORE_SOURCES CONFIGURE_DEPENDS
     "src/*.cpp"
     "src/*.hpp"
     "src/*.h"
+    "src/*/*.cpp"
+    "src/*/*.hpp"
+    "src/*/*.h"
 )
 
 add_executable(WovenCore ${WOVENCORE_SOURCES})
 
-# Enable Precompiled Headers
+# Configure include directories and compile settings
+target_include_directories(WovenCore PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${JoltPhysics_SOURCE_DIR}
+)
+
+# Enable Precompiled Headers AFTER include directories are set
 target_precompile_headers(WovenCore PRIVATE src/pch.hpp)
 
 target_compile_definitions(WovenCore PRIVATE
@@ -190,11 +199,6 @@ target_compile_definitions(WovenCore PRIVATE
     TRACY_ENABLE              # Enable Tracy profiling
     TRACY_CALLSTACK=8         # Capture 8 levels of callstack
     TRACY_VK_USE_SYMBOL_TABLE # Enable Vulkan symbol resolution
-)
-
-# Explicitly add include directories for dependencies that may not properly export them
-target_include_directories(WovenCore PRIVATE
-    ${JoltPhysics_SOURCE_DIR}
 )
 
 # Disable Jolt Debug Renderer in Release to save size/perf

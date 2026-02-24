@@ -1,9 +1,9 @@
-#include "Logger.hpp"
+#include "pch.hpp"
 
 #include <cstdio>
 #include <cstring>
 
-#include "pch.hpp"
+#include "Logger.hpp"
 
 #ifdef _WIN32
 #	include <Windows.h>
@@ -133,7 +133,7 @@ void Logger::VulkanWarning(const char* message)
 	if (first == 'v' && contains(message, "validation option was enabled"))
 		return;
 
-	if (first == 'v' && message[1] == 'k' && contains(message, "validation is adjusting settings"))
+	if (first == 'v' && contains(message, "validation is adjusting settings"))
 		return;
 
 	printf("%s[WARN]  Vulkan%s\n  %s\n\n", Color::Yellow, Color::Reset, message);

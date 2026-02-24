@@ -132,6 +132,9 @@ bool Application::InitVulkan()
 	if (!GetQueues())
 		return false;
 
+	if (!InitializeVulkanMemoryAllocator())
+		return false;
+
 	if (!CreateTracyContext())
 		return false;
 
@@ -174,48 +177,48 @@ bool Application::CreateVulkanInstance()
 	}
 
 	// Build instance
-	vkb::InstanceBuilder instanceBuilder;
-	instanceBuilder.set_app_name("Woven Core").set_engine_name("Woven Engine").require_api_version(1, 3, 0).enable_extensions(extCount, extensions);
+	vkb::InstanceBuilder builder;
+	builder.set_app_name("Woven Core");
+	builder.set_engine_name("Woven Engine");
+	builder.require_api_version(1, 3, 0);
+	builder.enable_extensions(extCount, extensions);
 
 #ifndef NDEBUG
-	// Debug builds: enhanced validation with best practices and synchronization checks
-	instanceBuilder.request_validation_layers(true)
-	        .use_default_debug_messenger()
-	        .set_debug_callback(
-	                [](VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT type, const VkDebugUtilsMessengerCallbackDataEXT* data, void* userData) -> VkBool32
-	                {
-		                if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
-			                Logger::VulkanError(data->pMessage);
-		                else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
-			                Logger::VulkanWarning(data->pMessage);
-		                else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)
-			                Logger::VulkanInfo(data->pMessage);
-
-		                return VK_FALSE;
-	                })
-	        .set_debug_messenger_severity(VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
-	        .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
-	        .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT)
-	        .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT)
-	        .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT)
-	        .add_validation_feature_disable(VK_VALIDATION_FEATURE_DISABLE_CORE_CHECKS_EXT);
+	builder.request_validation_layers(true);
+	builder.use_default_debug_messenger();
+	builder.set_debug_callback(
+	        [](VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT /*type*/, const VkDebugUtilsMessengerCallbackDataEXT* data, void* /*userData*/) -> VkBool32
+	        {
+		        if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+			        Logger::VulkanError(data->pMessage);
+		        else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+			        Logger::VulkanWarning(data->pMessage);
+		        else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)
+			        Logger::VulkanInfo(data->pMessage);
+		        return VK_FALSE;
+	        });
+	builder.set_debug_messenger_severity(VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT);
+	builder.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT);
+	builder.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT);
+	builder.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT);
+	builder.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT);
+	builder.add_validation_feature_disable(VK_VALIDATION_FEATURE_DISABLE_CORE_CHECKS_EXT);
 
 	Logger::Info("Validation: GPU-Assisted + Sync + Best Practices + Debug Printf");
 #else
-	// Release builds: no validation overhead
 	Logger::Info("Validation layers disabled (Release build)");
 #endif
 
-	auto instanceRet = instanceBuilder.build();
-
-	if (!instanceRet)
+	if (auto instanceRet = builder.build())
+	{
+		m_VkbInstance = std::move(instanceRet).value();
+		volkLoadInstance(m_VkbInstance.instance);
+	}
+	else
 	{
 		Logger::Error("Failed to create Vulkan Instance: %s", instanceRet.error().message().c_str());
 		return false;
 	}
-
-	m_VkbInstance = instanceRet.value();
-	volkLoadInstance(m_VkbInstance.instance);
 
 	// Log API version
 	uint32_t apiVersion = m_VkbInstance.instance_version;
@@ -283,23 +286,31 @@ bool Application::SelectPhysicalDevice()
 	required13.shaderDemoteToHelperInvocation = VK_TRUE;
 
 	vkb::PhysicalDeviceSelector selector(m_VkbInstance);
-	auto physicalDeviceRet = selector.set_surface(m_Surface).set_minimum_version(1, 3).set_required_features_11(required11).set_required_features_12(required12).set_required_features_13(required13).prefer_gpu_device_type(vkb::PreferredDeviceType::discrete).select();
+	selector.set_surface(m_Surface);
+	selector.set_minimum_version(1, 3);
+	selector.set_required_features_11(required11);
+	selector.set_required_features_12(required12);
+	selector.set_required_features_13(required13);
+	selector.prefer_gpu_device_type(vkb::PreferredDeviceType::discrete);
 
-	if (!physicalDeviceRet)
+	if (auto physicalDeviceRet = selector.select())
+	{
+		m_VkbPhysicalDevice = std::move(physicalDeviceRet).value();
+		Logger::Info("Selected GPU: %s", m_VkbPhysicalDevice.properties.deviceName);
+	}
+	else
 	{
 		Logger::Error("Failed to select Physical Device: %s", physicalDeviceRet.error().message().c_str());
 		return false;
 	}
 
-	m_VkbPhysicalDevice = physicalDeviceRet.value();
-	Logger::Info("Selected GPU: %s", m_VkbPhysicalDevice.properties.deviceName);
-
 #ifdef VK_KHR_fragment_shading_rate
-	VkPhysicalDeviceFragmentShadingRateFeaturesKHR fragmentShadingRateFeatures{};
-	fragmentShadingRateFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR;
-	fragmentShadingRateFeatures.pipelineFragmentShadingRate = VK_TRUE;
-	fragmentShadingRateFeatures.primitiveFragmentShadingRate = VK_TRUE;
-	fragmentShadingRateFeatures.attachmentFragmentShadingRate = VK_TRUE;
+	VkPhysicalDeviceFragmentShadingRateFeaturesKHR fragmentShadingRateFeatures{
+		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR,
+		.pipelineFragmentShadingRate = VK_TRUE,
+		.primitiveFragmentShadingRate = VK_TRUE,
+		.attachmentFragmentShadingRate = VK_TRUE,
+	};
 
 	if (m_VkbPhysicalDevice.enable_extension_if_present(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME))
 	{
@@ -328,37 +339,76 @@ bool Application::CreateLogicalDevice()
 	ZoneScopedN("CreateLogicalDevice");
 
 	vkb::DeviceBuilder deviceBuilder(m_VkbPhysicalDevice);
-	auto deviceRet = deviceBuilder.build();
 
-	if (!deviceRet)
+	if (auto deviceRet = deviceBuilder.build())
+	{
+		m_VkbDevice = std::move(deviceRet).value();
+		volkLoadDevice(m_VkbDevice.device);
+		return true;
+	}
+	else
 	{
 		Logger::Error("Failed to create Vulkan Device: %s", deviceRet.error().message().c_str());
 		return false;
 	}
-
-	m_VkbDevice = deviceRet.value();
-	volkLoadDevice(m_VkbDevice.device);
-
-	return true;
 }
 
 bool Application::GetQueues()
 {
 	ZoneScopedN("GetQueues");
 
-	auto graphicsQueueRet = m_VkbDevice.get_queue(vkb::QueueType::graphics);
-	auto presentQueueRet = m_VkbDevice.get_queue(vkb::QueueType::present);
-
-	if (!graphicsQueueRet || !presentQueueRet)
+	if (auto graphicsQueue = m_VkbDevice.get_queue(vkb::QueueType::graphics))
 	{
-		Logger::Error("Failed to get device queues");
+		if (auto presentQueue = m_VkbDevice.get_queue(vkb::QueueType::present))
+		{
+			m_GraphicsQueue = std::move(graphicsQueue).value();
+			m_PresentQueue = std::move(presentQueue).value();
+			Logger::Info("Vulkan Device and Queues ready");
+			return true;
+		}
+		else
+		{
+			Logger::Error("Failed to get presentation queue");
+			return false;
+		}
+	}
+	else
+	{
+		Logger::Error("Failed to get graphics queue");
+		return false;
+	}
+}
+
+bool Application::InitializeVulkanMemoryAllocator()
+{
+	ZoneScopedN("InitializeVulkanMemoryAllocator");
+
+	const VmaVulkanFunctions vmaVulkanFunc{
+		.vkGetInstanceProcAddr = vkGetInstanceProcAddr,
+		.vkGetDeviceProcAddr = vkGetDeviceProcAddr,
+	};
+
+	const VmaAllocatorCreateInfo allocatorInfo{
+		.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
+		.physicalDevice = m_VkbPhysicalDevice.physical_device,
+		.device = m_VkbDevice.device,
+		.preferredLargeHeapBlockSize = 0,
+		.pAllocationCallbacks = nullptr,
+		.pDeviceMemoryCallbacks = nullptr,
+		.pHeapSizeLimit = nullptr,
+		.pVulkanFunctions = &vmaVulkanFunc,
+		.instance = m_VkbInstance.instance,
+		.vulkanApiVersion = m_VkbInstance.instance_version,
+		.pTypeExternalMemoryHandleTypes = nullptr,
+	};
+
+	if (vmaCreateAllocator(&allocatorInfo, &m_VmaAllocator) != VK_SUCCESS)
+	{
+		Logger::Error("Failed to create VMA allocator");
 		return false;
 	}
 
-	m_GraphicsQueue = graphicsQueueRet.value();
-	m_PresentQueue = presentQueueRet.value();
-	Logger::Info("Vulkan Device and Queues ready");
-
+	Logger::Info("Vulkan Memory Allocator initialized");
 	return true;
 }
 
@@ -416,6 +466,13 @@ void Application::CleanupVulkan()
 	if (m_VkbDevice.device != VK_NULL_HANDLE)
 	{
 		vkDeviceWaitIdle(m_VkbDevice.device);
+
+		// Destroy VMA allocator
+		if (m_VmaAllocator != VK_NULL_HANDLE)
+		{
+			vmaDestroyAllocator(m_VmaAllocator);
+			m_VmaAllocator = VK_NULL_HANDLE;
+		}
 
 		// Destroy Tracy context
 		if (m_TracyContext)

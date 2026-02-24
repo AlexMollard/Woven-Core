@@ -67,7 +67,7 @@ CPMAddPackage(
     NAME VulkanMemoryAllocator
     GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
     GIT_TAG master
-    OPTIONS "VMA_STATIC_VULKAN_FUNCTIONS OFF" "VMA_DYNAMIC_VULKAN_FUNCTIONS OFF"
+    OPTIONS "VMA_STATIC_VULKAN_FUNCTIONS OFF" "VMA_DYNAMIC_VULKAN_FUNCTIONS ON"
 )
 
 # Ensure VMA target exists
@@ -224,6 +224,11 @@ target_link_libraries(WovenCore PRIVATE
     Jolt
     TracyClient
     Vulkan::Vulkan
+)
+
+target_compile_definitions(WovenCore PRIVATE
+    VMA_DYNAMIC_VULKAN_FUNCTIONS=1
+    VMA_STATIC_VULKAN_FUNCTIONS=0
 )
 
 # --- Installation Rules (Structuring the Release) ---

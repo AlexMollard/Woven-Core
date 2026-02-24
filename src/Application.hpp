@@ -1,9 +1,9 @@
 #pragma once
 
-#include "pch.hpp"
-
-// Volk must be included before VkBootstrap and Vulkan headers
+#include <vk_mem_alloc.h>
 #include <VkBootstrap.h>
+
+#include "pch.hpp"
 
 // Forward declare Tracy context
 namespace tracy
@@ -51,6 +51,7 @@ private:
 	bool SelectPhysicalDevice();
 	bool CreateLogicalDevice();
 	bool GetQueues();
+	bool InitializeVulkanMemoryAllocator();
 	bool CreateTracyContext();
 
 	// Cleanup helpers
@@ -65,6 +66,9 @@ private:
 	vkb::Instance m_VkbInstance;
 	vkb::PhysicalDevice m_VkbPhysicalDevice;
 	vkb::Device m_VkbDevice;
+
+	// Vulkan Memory Allocator
+	VmaAllocator m_VmaAllocator = VK_NULL_HANDLE;
 
 	VkSurfaceKHR m_Surface = VK_NULL_HANDLE;
 	VkQueue m_GraphicsQueue = VK_NULL_HANDLE;

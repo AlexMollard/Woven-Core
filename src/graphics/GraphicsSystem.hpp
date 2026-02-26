@@ -87,6 +87,9 @@ public:
 	// Profiling
 	void UpdateProfiler();
 
+	// Rendering
+	bool RenderFrame(float timeSeconds);
+
 	// Frame management
 	uint32_t GetCurrentFrameIndex() const
 	{
@@ -162,6 +165,11 @@ public:
 		return m_BindlessDescriptorSet;
 	}
 
+	VkPipelineLayout GetGlobalPipelineLayout() const
+	{
+		return m_GlobalPipelineLayout;
+	}
+
 	// Frame presentation
 	bool BeginFrame(uint32_t& outImageIndex);
 	bool EndFrame(uint32_t imageIndex);
@@ -184,6 +192,44 @@ public:
 	bool SupportsDescriptorBuffer() const
 	{
 		return m_SupportsDescriptorBuffer;
+	}
+
+	bool SupportsShaderObjects() const
+	{
+		return m_SupportsShaderObjects;
+	}
+
+	VkImageLayout GetSwapchainImageLayout(uint32_t index) const
+	{
+		return index < m_SwapchainImageLayouts.size() ? m_SwapchainImageLayouts[index] : VK_IMAGE_LAYOUT_UNDEFINED;
+	}
+
+	void SetSwapchainImageLayout(uint32_t index, VkImageLayout layout)
+	{
+		if (index < m_SwapchainImageLayouts.size())
+		{
+			m_SwapchainImageLayouts[index] = layout;
+		}
+	}
+
+	VkImageLayout GetHDRImageLayout() const
+	{
+		return m_HDRImageLayout;
+	}
+
+	void SetHDRImageLayout(VkImageLayout layout)
+	{
+		m_HDRImageLayout = layout;
+	}
+
+	VkImageLayout GetDepthImageLayout() const
+	{
+		return m_DepthImageLayout;
+	}
+
+	void SetDepthImageLayout(VkImageLayout layout)
+	{
+		m_DepthImageLayout = layout;
 	}
 
 private:
@@ -209,6 +255,13 @@ private:
 	bool CreateSyncPrimitives();
 	bool CreateBindlessDescriptors();
 	bool CreatePipelineInfrastructure();
+
+	// Rendering helpers
+	bool CreateShaders();
+	void DestroyShaders();
+	void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, float timeSeconds);
+	void TransitionImage(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess, VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess, VkImageAspectFlags aspectMask);
+	void SetDynamicState(VkCommandBuffer cmd, VkExtent2D extent);
 
 	// Cleanup helpers
 	void CleanupVulkan();
@@ -250,6 +303,10 @@ private:
 	VkImageView m_HDRRenderTargetView = VK_NULL_HANDLE;
 	VmaAllocation m_HDRRenderTargetAllocation = VK_NULL_HANDLE;
 	VkFormat m_HDRFormat = VK_FORMAT_R16G16B16A16_SFLOAT; // HDR format
+	VkImageLayout m_HDRImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+	// Depth layout tracking
+	VkImageLayout m_DepthImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
 	// Frame-in-flight management
 	FrameData m_Frames[MAX_FRAMES_IN_FLIGHT];
@@ -268,11 +325,20 @@ private:
 	VkPipelineLayout m_GlobalPipelineLayout = VK_NULL_HANDLE;
 	VkPipelineCache m_PipelineCache = VK_NULL_HANDLE;
 
+	// Shader system
+	std::unique_ptr<class ShaderSystem> m_ShaderSystem;
+
+	// Shader objects for rendering
+	VkShaderEXT m_TaskShader = VK_NULL_HANDLE;
+	VkShaderEXT m_MeshShader = VK_NULL_HANDLE;
+	VkShaderEXT m_FragmentShader = VK_NULL_HANDLE;
+
 	// Feature support flags
 	bool m_SupportsMeshShaders = false;
 	bool m_SupportsDescriptorBuffer = false;
 	bool m_SupportsFragmentShadingRate = false;
 	bool m_SupportsPushDescriptor = false;
+	bool m_SupportsShaderObjects = false;
 
 	// Window state
 	bool m_SwapchainOutOfDate = false;

@@ -169,6 +169,21 @@ CPMAddPackage(
         "TRACY_NO_SAMPLING OFF"        # Enable sampling profiler
 )
 
+# 10. Slang (Runtime shader compilation)
+CPMAddPackage(
+    NAME slang
+    GIT_REPOSITORY https://github.com/shader-slang/slang.git
+    GIT_TAG master
+    OPTIONS
+        "SLANG_ENABLE_EXAMPLES OFF"
+        "SLANG_ENABLE_TESTS OFF"
+        "SLANG_ENABLE_GFX OFF"
+)
+
+if(TARGET slang AND NOT TARGET slang::slang)
+    add_library(slang::slang ALIAS slang)
+endif()
+
 # --- Executable Target ---
 # Glob source files (CONFIGURE_DEPENDS ensures CMake reconfigures when files are added/removed)
 file(GLOB_RECURSE WOVENCORE_SOURCES CONFIGURE_DEPENDS
@@ -229,6 +244,12 @@ target_link_libraries(WovenCore PRIVATE
     TracyClient
     Vulkan::Vulkan
 )
+
+if(TARGET slang::slang)
+    target_link_libraries(WovenCore PRIVATE slang::slang)
+elseif(TARGET slang)
+    target_link_libraries(WovenCore PRIVATE slang)
+endif()
 
 target_compile_definitions(WovenCore PRIVATE
     VMA_DYNAMIC_VULKAN_FUNCTIONS=1

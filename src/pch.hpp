@@ -1,5 +1,8 @@
 #pragma once
 
+// Required by Volk when Vulkan headers are included (e.g., via SDL_vulkan.h).
+#define VK_NO_PROTOTYPES
+
 // Standard Library
 #include <cstdint>
 #include <cstdio>

@@ -9,6 +9,8 @@
 #include <VkBootstrap.h>
 
 #include "core/Logger.hpp"
+#include "graphics/RenderConstants.hpp"
+#include "graphics/ShaderSystem.hpp"
 #include "GraphicsSystem.hpp"
 
 GraphicsSystem::GraphicsSystem()
@@ -74,12 +76,28 @@ bool GraphicsSystem::Initialize(SDL_Window* window)
 	if (!CreatePipelineInfrastructure())
 		return false;
 
+	m_ShaderSystem = std::make_unique<ShaderSystem>();
+	const VkPushConstantRange pushConstants{ VK_SHADER_STAGE_ALL, 0, sizeof(PushConstants) };
+	if (!m_ShaderSystem->Initialize(m_VkbDevice.device, m_BindlessDescriptorSetLayout, pushConstants))
+		return false;
+
+	if (!CreateShaders())
+		return false;
+
 	return true;
 }
 
 void GraphicsSystem::Shutdown()
 {
 	ZoneScopedN("GraphicsSystem::Shutdown");
+
+	DestroyShaders();
+
+	if (m_ShaderSystem)
+	{
+		m_ShaderSystem->Shutdown();
+		m_ShaderSystem.reset();
+	}
 	CleanupVulkan();
 }
 
@@ -89,6 +107,26 @@ void GraphicsSystem::UpdateProfiler()
 	{
 		TracyVkCollect(m_TracyContext, m_TracyCommandBuffer);
 	}
+}
+
+bool GraphicsSystem::RenderFrame(float timeSeconds)
+{
+	uint32_t imageIndex = 0;
+	if (!BeginFrame(imageIndex))
+	{
+		return false;
+	}
+
+	FrameData& frame = GetCurrentFrame();
+	if (frame.commandBuffer == VK_NULL_HANDLE)
+	{
+		Logger::Error("Invalid command buffer for frame %u", GetCurrentFrameIndex());
+		EndFrame(imageIndex);
+		return false;
+	}
+
+	RecordFrame(frame.commandBuffer, imageIndex, timeSeconds);
+	return EndFrame(imageIndex);
 }
 
 // --- Vulkan Initialization Steps ---
@@ -110,7 +148,7 @@ bool GraphicsSystem::CreateVulkanInstance(SDL_Window* window)
 	vkb::InstanceBuilder builder;
 	builder.set_app_name("Woven Core");
 	builder.set_engine_name("Woven Engine");
-	builder.require_api_version(1, 3, 0);
+	builder.require_api_version(1, 4, 0);
 	builder.enable_extensions(extCount, extensions);
 
 #ifndef NDEBUG
@@ -219,7 +257,7 @@ bool GraphicsSystem::SelectPhysicalDevice()
 
 	vkb::PhysicalDeviceSelector selector(m_VkbInstance);
 	selector.set_surface(m_Surface);
-	selector.set_minimum_version(1, 3);
+	selector.set_minimum_version(1, 4);
 	selector.set_required_features_11(required11);
 	selector.set_required_features_12(required12);
 	selector.set_required_features_13(required13);
@@ -242,6 +280,99 @@ bool GraphicsSystem::SelectPhysicalDevice()
 		.taskShader = VK_TRUE,
 		.meshShader = VK_TRUE,
 	};
+
+	// Enable Shader Objects (required for modern pipeline-less rendering)
+	VkPhysicalDeviceShaderObjectFeaturesEXT shaderObjectFeatures{
+		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OBJECT_FEATURES_EXT,
+		.shaderObject = VK_TRUE,
+	};
+
+	if (!m_VkbPhysicalDevice.enable_extension_if_present(VK_EXT_SHADER_OBJECT_EXTENSION_NAME))
+	{
+		Logger::Error("VK_EXT_shader_object is required for this renderer");
+		return false;
+	}
+	if (!m_VkbPhysicalDevice.enable_extension_features_if_present(shaderObjectFeatures))
+	{
+		Logger::Error("VK_EXT_shader_object present but features unavailable");
+		return false;
+	}
+	m_SupportsShaderObjects = true;
+	Logger::Info("Enabled VK_EXT_shader_object");
+
+	// Enable Vertex Input Dynamic State (required for shader objects)
+	VkPhysicalDeviceVertexInputDynamicStateFeaturesEXT vertexInputFeatures{
+		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_INPUT_DYNAMIC_STATE_FEATURES_EXT,
+		.vertexInputDynamicState = VK_TRUE,
+	};
+
+	if (!m_VkbPhysicalDevice.enable_extension_if_present(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME))
+	{
+		Logger::Error("VK_EXT_vertex_input_dynamic_state is required for shader objects");
+		return false;
+	}
+	if (!m_VkbPhysicalDevice.enable_extension_features_if_present(vertexInputFeatures))
+	{
+		Logger::Error("VK_EXT_vertex_input_dynamic_state present but features unavailable");
+		return false;
+	}
+	Logger::Info("Enabled VK_EXT_vertex_input_dynamic_state");
+
+	// Enable Extended Dynamic State 2 + 3 (required for shader objects)
+	VkPhysicalDeviceExtendedDynamicStateFeaturesEXT dynamicStateFeatures{
+		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT,
+		.extendedDynamicState = VK_TRUE,
+	};
+
+	if (!m_VkbPhysicalDevice.enable_extension_if_present(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME))
+	{
+		Logger::Error("VK_EXT_extended_dynamic_state is required for shader objects");
+		return false;
+	}
+	if (!m_VkbPhysicalDevice.enable_extension_features_if_present(dynamicStateFeatures))
+	{
+		Logger::Error("VK_EXT_extended_dynamic_state present but features unavailable");
+		return false;
+	}
+	Logger::Info("Enabled VK_EXT_extended_dynamic_state");
+
+	VkPhysicalDeviceExtendedDynamicState2FeaturesEXT dynamicState2Features{
+		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_2_FEATURES_EXT,
+		.extendedDynamicState2 = VK_TRUE,
+	};
+
+	if (!m_VkbPhysicalDevice.enable_extension_if_present(VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME))
+	{
+		Logger::Error("VK_EXT_extended_dynamic_state2 is required for shader objects");
+		return false;
+	}
+	if (!m_VkbPhysicalDevice.enable_extension_features_if_present(dynamicState2Features))
+	{
+		Logger::Error("VK_EXT_extended_dynamic_state2 present but features unavailable");
+		return false;
+	}
+	Logger::Info("Enabled VK_EXT_extended_dynamic_state2");
+
+	VkPhysicalDeviceExtendedDynamicState3FeaturesEXT dynamicState3Features{};
+	dynamicState3Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT;
+	dynamicState3Features.extendedDynamicState3PolygonMode = VK_TRUE;
+	dynamicState3Features.extendedDynamicState3RasterizationSamples = VK_TRUE;
+	dynamicState3Features.extendedDynamicState3ColorBlendEnable = VK_TRUE;
+	dynamicState3Features.extendedDynamicState3ColorBlendEquation = VK_TRUE;
+	dynamicState3Features.extendedDynamicState3ColorWriteMask = VK_TRUE;
+	dynamicState3Features.extendedDynamicState3AlphaToCoverageEnable = VK_TRUE;
+
+	if (!m_VkbPhysicalDevice.enable_extension_if_present(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME))
+	{
+		Logger::Error("VK_EXT_extended_dynamic_state3 is required for shader objects");
+		return false;
+	}
+	if (!m_VkbPhysicalDevice.enable_extension_features_if_present(dynamicState3Features))
+	{
+		Logger::Error("VK_EXT_extended_dynamic_state3 present but features unavailable");
+		return false;
+	}
+	Logger::Info("Enabled VK_EXT_extended_dynamic_state3");
 
 	if (m_VkbPhysicalDevice.enable_extension_if_present(VK_EXT_MESH_SHADER_EXTENSION_NAME))
 	{
@@ -289,8 +420,7 @@ bool GraphicsSystem::SelectPhysicalDevice()
 		m_VkbPhysicalDevice.enable_extension_if_present(VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME);
 	}
 
-	// Enable Extended Dynamic State 3
-	m_VkbPhysicalDevice.enable_extension_if_present(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
+	// Extended dynamic state 3 enabled above
 
 #ifdef VK_KHR_fragment_shading_rate
 	VkPhysicalDeviceFragmentShadingRateFeaturesKHR fragmentShadingRateFeatures{
@@ -755,6 +885,7 @@ bool GraphicsSystem::CreateDepthResources()
 	}
 
 	Logger::Info("Depth buffer created: %ux%u, format %d", m_SwapchainExtent.width, m_SwapchainExtent.height, m_DepthFormat);
+	m_DepthImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	return true;
 }
 
@@ -777,6 +908,8 @@ void GraphicsSystem::CleanupDepthResources()
 		m_DepthImage = VK_NULL_HANDLE;
 		m_DepthImageAllocation = VK_NULL_HANDLE;
 	}
+
+	m_DepthImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 }
 
 bool GraphicsSystem::CreateHDRRenderTarget()
@@ -795,7 +928,7 @@ bool GraphicsSystem::CreateHDRRenderTarget()
 	imageInfo.format = m_HDRFormat;
 	imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
 	imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+	imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
 	imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -828,6 +961,7 @@ bool GraphicsSystem::CreateHDRRenderTarget()
 	}
 
 	Logger::Info("HDR render target created: %ux%u, format R16G16B16A16_SFLOAT", m_SwapchainExtent.width, m_SwapchainExtent.height);
+	m_HDRImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	return true;
 }
 
@@ -850,6 +984,8 @@ void GraphicsSystem::CleanupHDRRenderTarget()
 		m_HDRRenderTarget = VK_NULL_HANDLE;
 		m_HDRRenderTargetAllocation = VK_NULL_HANDLE;
 	}
+
+	m_HDRImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 }
 
 bool GraphicsSystem::RecreateSwapchain(SDL_Window* window)
@@ -1148,7 +1284,7 @@ bool GraphicsSystem::CreatePipelineInfrastructure()
 	VkPushConstantRange pushConstantRange{};
 	pushConstantRange.stageFlags = VK_SHADER_STAGE_ALL;
 	pushConstantRange.offset = 0;
-	pushConstantRange.size = 128; // Reserve 128 bytes for per-draw data
+	pushConstantRange.size = sizeof(PushConstants);
 
 	VkPipelineLayoutCreateInfo layoutInfo{};
 	layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -1269,7 +1405,7 @@ bool GraphicsSystem::EndFrame(uint32_t imageIndex)
 	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
 	// Wait for swapchain image to be acquired
-	VkPipelineStageFlags waitStages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	VkPipelineStageFlags waitStages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
 	submitInfo.waitSemaphoreCount = 1;
 	submitInfo.pWaitSemaphores = &frame.swapchainAcquireSemaphore;
 	submitInfo.pWaitDstStageMask = &waitStages;
@@ -1335,6 +1471,281 @@ void GraphicsSystem::HandleResize(SDL_Window* window)
 	m_SwapchainOutOfDate = true;
 
 	Logger::Info("Window resized to %dx%d", width, height);
+}
+
+// --- Rendering Implementation ---
+
+bool GraphicsSystem::CreateShaders()
+{
+	if (!m_SupportsMeshShaders)
+	{
+		Logger::Error("Mesh shaders not supported on this device");
+		return false;
+	}
+
+	ShaderCompileDesc taskDesc{};
+	taskDesc.filePath = "shaders/triangle.slang";
+	taskDesc.entryPoint = "taskMain";
+	taskDesc.stage = VK_SHADER_STAGE_TASK_BIT_EXT;
+
+	ShaderCompileDesc meshDesc{};
+	meshDesc.filePath = "shaders/triangle.slang";
+	meshDesc.entryPoint = "meshMain";
+	meshDesc.stage = VK_SHADER_STAGE_MESH_BIT_EXT;
+
+	ShaderCompileDesc psDesc{};
+	psDesc.filePath = "shaders/triangle.slang";
+	psDesc.entryPoint = "psMain";
+	psDesc.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+	if (!m_ShaderSystem->CreateShaderObject(taskDesc, m_TaskShader))
+	{
+		return false;
+	}
+
+	if (!m_ShaderSystem->CreateShaderObject(meshDesc, m_MeshShader))
+	{
+		DestroyShaders();
+		return false;
+	}
+
+	if (!m_ShaderSystem->CreateShaderObject(psDesc, m_FragmentShader))
+	{
+		DestroyShaders();
+		return false;
+	}
+
+	return true;
+}
+
+void GraphicsSystem::DestroyShaders()
+{
+	if (m_ShaderSystem)
+	{
+		m_ShaderSystem->DestroyShader(m_TaskShader);
+		m_ShaderSystem->DestroyShader(m_MeshShader);
+		m_ShaderSystem->DestroyShader(m_FragmentShader);
+	}
+
+	m_TaskShader = VK_NULL_HANDLE;
+	m_MeshShader = VK_NULL_HANDLE;
+	m_FragmentShader = VK_NULL_HANDLE;
+}
+
+void GraphicsSystem::RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, float timeSeconds)
+{
+	const VkExtent2D extent = GetSwapchainExtent();
+	const VkClearValue colorClear = { .color = { { 0.02f, 0.02f, 0.04f, 1.0f } } };
+	const VkClearValue depthClear = {
+		.depthStencil = { 1.0f, 0 }
+	};
+
+	const VkImageLayout hdrOldLayout = GetHDRImageLayout();
+	VkPipelineStageFlags2 hdrSrcStage = VK_PIPELINE_STAGE_2_NONE;
+	VkAccessFlags2 hdrSrcAccess = 0;
+	if (hdrOldLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+	{
+		hdrSrcStage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+		hdrSrcAccess = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+	}
+	else if (hdrOldLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+	{
+		hdrSrcStage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+		hdrSrcAccess = VK_ACCESS_2_TRANSFER_READ_BIT;
+	}
+	TransitionImage(cmd, GetHDRRenderTarget(), hdrOldLayout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, hdrSrcStage, hdrSrcAccess, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+	SetHDRImageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+	const VkImageLayout depthOldLayout = GetDepthImageLayout();
+	VkPipelineStageFlags2 depthSrcStage = VK_PIPELINE_STAGE_2_NONE;
+	VkAccessFlags2 depthSrcAccess = 0;
+	if (depthOldLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
+	{
+		depthSrcStage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+		depthSrcAccess = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	}
+	TransitionImage(cmd, GetDepthImage(), depthOldLayout, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, depthSrcStage, depthSrcAccess, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+	SetDepthImageLayout(VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+
+	VkRenderingAttachmentInfo colorAttachment{};
+	colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+	colorAttachment.imageView = GetHDRRenderTargetView();
+	colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	colorAttachment.clearValue = colorClear;
+
+	VkRenderingAttachmentInfo depthAttachment{};
+	depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+	depthAttachment.imageView = GetDepthImageView();
+	depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+	depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	depthAttachment.clearValue = depthClear;
+
+	VkRenderingInfo renderingInfo{};
+	renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+	renderingInfo.renderArea = {
+		{ 0, 0 },
+        extent
+	};
+	renderingInfo.layerCount = 1;
+	renderingInfo.colorAttachmentCount = 1;
+	renderingInfo.pColorAttachments = &colorAttachment;
+	renderingInfo.pDepthAttachment = &depthAttachment;
+
+	vkCmdBeginRendering(cmd, &renderingInfo);
+
+	SetDynamicState(cmd, extent);
+	if (m_TaskShader == VK_NULL_HANDLE || m_MeshShader == VK_NULL_HANDLE || m_FragmentShader == VK_NULL_HANDLE)
+	{
+		Logger::Error("Shader objects not initialized");
+		vkCmdEndRendering(cmd);
+		return;
+	}
+
+	const VkShaderStageFlagBits stages[] = { VK_SHADER_STAGE_TASK_BIT_EXT, VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT };
+	const VkShaderEXT shaders[] = { m_TaskShader, m_MeshShader, m_FragmentShader };
+	vkCmdBindShadersEXT(cmd, 3, stages, shaders);
+
+	VkDescriptorSet bindlessSet = GetBindlessDescriptorSet();
+	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, GetGlobalPipelineLayout(), 0, 1, &bindlessSet, 0, nullptr);
+
+	PushConstants push{};
+	push.time = timeSeconds;
+	push.resolution = glm::vec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
+	vkCmdPushConstants(cmd, GetGlobalPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(PushConstants), &push);
+
+	// Dispatch mesh tasks: 1 task workgroup to generate 1 mesh workgroup
+	vkCmdDrawMeshTasksEXT(cmd, 1, 1, 1);
+
+	vkCmdEndRendering(cmd);
+
+	TransitionImage(cmd, GetHDRRenderTarget(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+	SetHDRImageLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+	const VkImageLayout swapchainOldLayout = GetSwapchainImageLayout(imageIndex);
+	VkPipelineStageFlags2 swapchainSrcStage = VK_PIPELINE_STAGE_2_NONE;
+	VkAccessFlags2 swapchainSrcAccess = 0;
+	if (swapchainOldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+	{
+		swapchainSrcStage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+		swapchainSrcAccess = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+	}
+	else if (swapchainOldLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
+	{
+		swapchainSrcStage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_BLIT_BIT | VK_PIPELINE_STAGE_2_RESOLVE_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT;
+		swapchainSrcAccess = 0;
+	}
+	else if (swapchainOldLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+	{
+		swapchainSrcStage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_BLIT_BIT | VK_PIPELINE_STAGE_2_RESOLVE_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT;
+		swapchainSrcAccess = 0;
+	}
+	TransitionImage(cmd, GetSwapchainImage(imageIndex), swapchainOldLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, swapchainSrcStage, swapchainSrcAccess, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+	SetSwapchainImageLayout(imageIndex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+	VkImageBlit2 blitRegion{};
+	blitRegion.sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2;
+	blitRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	blitRegion.srcSubresource.layerCount = 1;
+	blitRegion.srcOffsets[1] = { static_cast<int32_t>(extent.width), static_cast<int32_t>(extent.height), 1 };
+	blitRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	blitRegion.dstSubresource.layerCount = 1;
+	blitRegion.dstOffsets[1] = { static_cast<int32_t>(extent.width), static_cast<int32_t>(extent.height), 1 };
+
+	VkBlitImageInfo2 blitInfo{};
+	blitInfo.sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2;
+	blitInfo.srcImage = GetHDRRenderTarget();
+	blitInfo.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+	blitInfo.dstImage = GetSwapchainImage(imageIndex);
+	blitInfo.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+	blitInfo.filter = VK_FILTER_LINEAR;
+	blitInfo.regionCount = 1;
+	blitInfo.pRegions = &blitRegion;
+
+	vkCmdBlitImage2(cmd, &blitInfo);
+
+	TransitionImage(cmd, GetSwapchainImage(imageIndex), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_NONE, 0, VK_IMAGE_ASPECT_COLOR_BIT);
+	SetSwapchainImageLayout(imageIndex, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+}
+
+void GraphicsSystem::TransitionImage(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess, VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess, VkImageAspectFlags aspectMask)
+{
+	if (oldLayout == newLayout)
+	{
+		return;
+	}
+
+	VkImageMemoryBarrier2 barrier{};
+	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+	barrier.srcStageMask = srcStage;
+	barrier.srcAccessMask = srcAccess;
+	barrier.dstStageMask = dstStage;
+	barrier.dstAccessMask = dstAccess;
+	barrier.oldLayout = oldLayout;
+	barrier.newLayout = newLayout;
+	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.image = image;
+	barrier.subresourceRange.aspectMask = aspectMask;
+	barrier.subresourceRange.levelCount = 1;
+	barrier.subresourceRange.layerCount = 1;
+
+	VkDependencyInfo depInfo{};
+	depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+	depInfo.imageMemoryBarrierCount = 1;
+	depInfo.pImageMemoryBarriers = &barrier;
+
+	vkCmdPipelineBarrier2(cmd, &depInfo);
+}
+
+void GraphicsSystem::SetDynamicState(VkCommandBuffer cmd, VkExtent2D extent)
+{
+	VkViewport viewport{};
+	viewport.x = 0.0f;
+	viewport.y = 0.0f;
+	viewport.width = static_cast<float>(extent.width);
+	viewport.height = static_cast<float>(extent.height);
+	viewport.minDepth = 0.0f;
+	viewport.maxDepth = 1.0f;
+	vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+	VkRect2D scissor{};
+	scissor.extent = extent;
+	vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+	vkCmdSetRasterizerDiscardEnable(cmd, VK_FALSE);
+	vkCmdSetCullMode(cmd, VK_CULL_MODE_NONE);
+	vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+	vkCmdSetPrimitiveTopology(cmd, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+	vkCmdSetDepthTestEnable(cmd, VK_FALSE);
+	vkCmdSetDepthWriteEnable(cmd, VK_FALSE);
+	vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_LESS_OR_EQUAL);
+	vkCmdSetDepthBiasEnable(cmd, VK_FALSE);
+	vkCmdSetStencilTestEnable(cmd, VK_FALSE);
+	vkCmdSetLineWidth(cmd, 1.0f);
+
+	vkCmdSetPolygonModeEXT(cmd, VK_POLYGON_MODE_FILL);
+	vkCmdSetRasterizationSamplesEXT(cmd, VK_SAMPLE_COUNT_1_BIT);
+	vkCmdSetAlphaToCoverageEnableEXT(cmd, VK_FALSE);
+
+	const VkBool32 blendEnable = VK_FALSE;
+	vkCmdSetColorBlendEnableEXT(cmd, 0, 1, &blendEnable);
+
+	VkColorBlendEquationEXT blendEquation{};
+	blendEquation.colorBlendOp = VK_BLEND_OP_ADD;
+	blendEquation.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+	blendEquation.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+	blendEquation.alphaBlendOp = VK_BLEND_OP_ADD;
+	blendEquation.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+	blendEquation.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+	vkCmdSetColorBlendEquationEXT(cmd, 0, 1, &blendEquation);
+
+	const VkColorComponentFlags colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+	vkCmdSetColorWriteMaskEXT(cmd, 0, 1, &colorWriteMask);
+
+	vkCmdSetVertexInputEXT(cmd, 0, nullptr, 0, nullptr);
 }
 
 // --- Cleanup Helpers ---

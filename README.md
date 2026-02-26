@@ -14,7 +14,8 @@ This project is for my learning and experimentation with modern graphics program
 | Component | Technology | Reasoning |
 | :--- | :--- | :--- |
 | **Windowing** | **SDL3** | Superior high-DPI support and modern event loop compared to GLFW. |
-| **Graphics API** | **Vulkan 1.4** | Using `VK_EXT_shader_object` and `VK_KHR_dynamic_rendering`. |
+| **Graphics API** | **Vulkan 1.4** | Using `VK_EXT_shader_object`, `VK_EXT_mesh_shader`, and `VK_KHR_dynamic_rendering`. |
+| **Shader Compiler** | **Slang** | Runtime SPIR-V compilation from Slang shader language (HLSL-like syntax). |
 | **Vulkan Setup** | **vk-bootstrap** | Simplifies instance, device, and queue creation with error handling. |
 | **Vulkan Loader** | **Volk** | Meta-loader for Vulkan with per-device function pointers. |
 | **GPU Memory** | **VMA** | Industry standard for GPU memory virtualization. |
@@ -30,10 +31,18 @@ This project is for my learning and experimentation with modern graphics program
 To build Woven Core, you need:
 
 1.  **Vulkan SDK** (Latest Version): [Download Here](https://vulkan.lunarg.com/)
+    - Requires driver support for Vulkan 1.4
+    - **Required Extensions:**
+      - `VK_EXT_shader_object` (shader objects)
+      - `VK_EXT_mesh_shader` (task and mesh shaders)
+      - `VK_EXT_vertex_input_dynamic_state` (dynamic vertex input)
+      - `VK_EXT_extended_dynamic_state` / `2` / `3` (full dynamic state)
 2.  **C++ Compiler**:
     *   **Windows**: MSVC (Visual Studio 2022 v17.8+) or Clang-CL.
     *   **Linux**: GCC 13+ or Clang 16+ (Must support C++23).
 3.  **CMake**: Version 3.28 or higher.
+
+**Note**: Not all GPUs support mesh shaders. Check compatibility at [GPUInfo](https://vulkan.gpuinfo.org/)
 
 ## 🏗️ Building and Running
 
@@ -94,27 +103,28 @@ cpack -G TGZ
 
 Artifacts will be generated in the build directory.
 
-## 📂 Project Structure
-
-```code
-WovenCore/
-├── CMakeLists.txt       # Main build script
-├── CMakePresets.json    # Build profiles (Debug/Release/OS)
-├── src/
-│   └── main.cpp         # Engine Entry Point
-├── shaders/             # HLSL/GLSL/Slang Shaders
-└── assets/              # Models and Textures (copied to bin/ on build)
-```
-
 ## 🧠 Architecture Highlights
 
-Bindless Resources: Textures are accessed via indices into a global descriptor heap (NonUniformEXT). WIP
+### Rendering Pipeline
+- **Shader Objects (VK_EXT_shader_object)**: Pipeline-less rendering with full dynamic state control
+- **Mesh Shaders (VK_EXT_mesh_shader)**: Modern GPU-driven geometry pipeline using task and mesh shaders
+- **Runtime Shader Compilation**: Slang compiles shaders to SPIR-V 1.5 at application startup
+- **Dynamic Rendering**: No render passes - using `vkCmdBeginRendering` for HDR targets with swapchain blit
+- **Bindless Resources**: 16K texture slots with update-after-bind descriptors (VK_EXT_descriptor_indexing)
 
-No Render Passes: We use vkCmdBeginRendering exclusively. WIP
+### System Architecture
+- **WindowSystem**: SDL3 window lifecycle and event handling
+- **GraphicsSystem**: Vulkan 1.4 initialization, rendering, and resource management
+  - Integrated ShaderSystem for runtime Slang compilation
+  - Direct rendering implementation (no indirection layers)
+- **PhysicsSystem**: Jolt Physics integration with task-based parallelism
+- **TaskSchedulingSystem**: enkiTS for multi-threaded workloads
 
-Task Graph: Logic updates and Physics (Jolt) run on background threads via enkiTS. WIP
-
-Static Linking: Dependencies like SDL3 and Jolt are statically linked to reduce DLL hell. WIP
+### GPU Features
+- **Synchronization2**: Modern barrier API with `VkPipelineStageFlags2` and `VkAccessFlags2`
+- **Extended Dynamic State 1/2/3**: Full pipeline state control without pipeline objects
+- **Layout Tracking**: Per-image layout state for optimal barrier placement
+- **Tracy GPU Profiling**: Real-time performance monitoring with GPU timeline integration
 
 ## 📄 License
 

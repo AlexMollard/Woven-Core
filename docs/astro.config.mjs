@@ -4,6 +4,9 @@ import starlight from '@astrojs/starlight';
 
 // https://astro.build/config
 export default defineConfig({
+	site: 'https://alexmollard.github.io',
+	base: '/Woven-Core/',
+	trailingSlash: 'always',
 	integrations: [
 		starlight({
 			title: 'WovenCore Docs',

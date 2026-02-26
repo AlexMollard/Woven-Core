@@ -1,0 +1,64 @@
+---
+title: Engine Docs
+description: Architectural decisions and why things are built this way.
+---
+
+This section documents **design decisions** in WovenCore. Each page explains:
+- **Why** a feature exists
+- **What alternatives** were considered
+- **What trade-offs** were made
+- **When** the decision might change
+
+## Philosophy
+
+WovenCore is a **learning playground**, not a production engine. That means:
+- Choosing modern techniques over compatibility
+- Simplicity over premature optimization
+- Learning over "best practices" without understanding why
+
+**Document decisions, not just code.** When you make a choice, write down why. Future you will thank past you.
+
+## Topics
+
+### [Architecture](./architecture/)
+
+Why the system model? Why SDL3 callbacks? How does lifecycle work?
+
+**Key questions answered:**
+- Why own systems instead of ECS?
+- Why initialize in this specific order?
+- How do systems communicate?
+
+### [Systems Overview](./systems/)
+
+What does each system do and why does it exist?
+
+**Key systems:**
+- **Application:** The orchestrator
+- **WindowSystem:** Why separate from graphics?
+- **GraphicsSystem:** All the Vulkan decisions
+- **ShaderSystem:** Why Slang? Why runtime compilation?
+- **PhysicsSystem:** Why Jolt?
+- **TaskSchedulingSystem:** Why enkiTS?
+
+### [Graphics System](./graphics/)
+
+Deep dive into Vulkan architecture and modern rendering decisions.
+
+**Major decisions covered:**
+- Why shader objects over pipelines?
+- Why dynamic rendering over render passes?
+- Why bindless descriptors?
+- Why mesh shaders?
+- Why HDR target + blit?
+- Why per-frame command pools?
+
+### [Build and Run](./build-run/)
+
+How to build and why modern tooling is required.
+
+**Covers:**
+- Prerequisites and why they're needed
+- Build steps and presets
+- Troubleshooting common issues
+- Debug vs Release trade-offs

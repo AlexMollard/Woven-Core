@@ -1,0 +1,50 @@
+---
+title: WovenCore Docs
+description: Learn modern graphics programming through code and rationale.
+---
+
+Welcome! This documentation explains **why** things are built the way they are, not just **what** they do.
+
+## Philosophy
+
+This is a **learning project** focused on:
+- Modern Vulkan features (shader objects, dynamic rendering, mesh shaders)
+- GPU-driven rendering techniques
+- Understanding trade-offs and design decisions
+
+**Not a production engine.** Not trying to support every GPU. Not optimizing for the widest compatibility. Learning modern techniques that production engines use.
+
+## How to use these docs
+
+**Engine Docs:** Explains architectural decisions and why features were chosen. Read this to understand the thought process.
+
+**Vulkan Learning:** Maps Vulkan concepts to the codebase. Learn by reading code alongside explanations.
+
+**Notes:** Working journal of decisions, progress, and open questions. See the messy process, not just the polished result.
+
+## Start here
+
+### Understand the architecture
+
+- [Why the system model?](./engine/architecture/)
+- [What does each system do?](./engine/systems/)
+- [Why modern Vulkan?](./engine/graphics/)
+
+### Learn Vulkan through code
+
+- [Learning plan](./vulkan/learning-plan/) - Staged approach to understanding Vulkan
+- [Code map](./vulkan/code-map/) - Where concepts live in the codebase
+- [Resources](./vulkan/resources/) - What to read, what to skip
+
+### Track progress
+
+- [Decision log](./notes/decision-log/) - Why things are the way they are
+- [Dev log](./notes/devlog/) - Daily progress
+- [Open questions](./notes/questions/) - Things to figure out
+
+## Contributing to docs
+
+When you learn something or make a decision:
+1. Write it in [Notes](./notes/) immediately
+2. When it stabilizes, promote to [Engine Docs](./engine/)
+3. Link to code liberally - context matters

@@ -1,0 +1,88 @@
+---
+title: Architecture
+description: Why the engine is structured around systems and SDL3 lifecycle.
+---
+
+## Design Philosophy
+
+WovenCore is intentionally **minimal and system-oriented**. It's not a full game engine—it's a learning playground for modern graphics and physics techniques.
+
+**Core principles:**
+- Each system owns its domain (window, graphics, physics, tasks)
+- Systems initialize in dependency order
+- One [Application](src/core/Application.hpp) instance orchestrates everything
+- SDL3 drives the frame loop—no manual event pumping
+
+## Why SDL3 Callbacks?
+
+**Decision:** Use [SDL3's callback model](src/main.cpp#L10) (`SDL_AppInit`, `SDL_AppIterate`, `SDL_AppEvent`, `SDL_AppQuit`) instead of a manual game loop.
+
+**Why:**
+- **Platform abstraction:** SDL handles platform differences (Windows message pump, macOS event loop, etc.)
+- **Clean separation:** Init, update, event handling, and shutdown are distinct phases
+- **Mobile-ready:** Callback model maps to mobile app lifecycle (suspend/resume)
+- **Less boilerplate:** No manual `while (!quit)` loop and event polling
+
+**Trade-off:** Slightly less control over main loop. For a learning project, the simplicity wins.
+
+## Why System Ownership Model?
+
+**Pattern:** [Application](src/core/Application.cpp#L9) owns `unique_ptr` to each system. Systems are created together, initialized in order, updated each frame, shut down in reverse order.
+
+**Why:**
+- **Clear ownership:** No shared pointers or unclear lifetimes
+- **Dependency order enforced:** Window before Graphics (graphics needs SDL window). Graphics before Shader (shaders need device).
+- **Easy to reason about:** Linear init, linear shutdown
+
+**Alternative (rejected):** Entity-component-system (ECS) or service locator. Too much indirection for a small project.
+
+## Lifecycle and Dependency Order
+
+### Startup Sequence
+
+1. SDL calls [SDL_AppInit](src/main.cpp#L10) → constructs `Application` → calls [Init()](src/core/Application.cpp#L17)
+2. [Application::Init](src/core/Application.cpp#L17) initializes systems **in order:**
+   - [WindowSystem](src/window/WindowSystem.cpp#L13): Create SDL window (needed for Vulkan surface)
+   - [GraphicsSystem](src/graphics/GraphicsSystem.cpp#L18): Initialize Vulkan (needs window for surface)
+   - [PhysicsSystem](src/physics/PhysicsSystem.cpp#L13): Initialize Jolt allocator
+   - [TaskSchedulingSystem](src/scheduling/TaskSchedulingSystem.cpp#L13): Initialize enkiTS
+
+**Why this order?**
+- Graphics needs window for Vulkan surface creation
+- Physics and tasks are independent of graphics but come after so they can use GPU for debugging visualization later
+
+### Frame Loop
+
+3. SDL calls [SDL_AppIterate](src/main.cpp#L25) → calls [Application::Update](src/core/Application.cpp#L38) each frame
+
+**Update order:**
+- [Physics update](src/core/Application.cpp#L43): Step simulation
+- (Future) Schedule physics tasks on worker threads
+- [Graphics profiler update](src/core/Application.cpp#L54): Collect Tracy GPU data
+- [Render frame](src/core/Application.cpp#L57): Render and present
+
+**Why physics before graphics?** Gameplay/physics determines transforms. Graphics renders the result of that frame's simulation.
+
+### Shutdown Sequence
+
+4. SDL calls [SDL_AppQuit](src/main.cpp#L46) → [Application::Shutdown](src/core/Application.cpp#L61)
+
+**Reverse order:**
+- Wait for all tasks to complete (ensure GPU idle)
+- Shutdown physics
+- Shutdown graphics (destroys Vulkan resources)
+- Shutdown window (destroys SDL window)
+
+**Why reverse?** Graphics still holds references to the window. Must destroy graphics first.
+The code uses Tracy zones in lifecycle and per-frame paths, and the graphics
+system integrates Tracy GPU context collection.
+
+## Code map
+
+- [src/main.cpp](src/main.cpp) defines SDL3 callback entry points
+- [src/core/Application.*](src/core/Application.hpp) owns systems and main update loop
+- [src/window/WindowSystem.*](src/window/WindowSystem.hpp) sets up SDL3 windowing
+- [src/graphics/GraphicsSystem.*](src/graphics/GraphicsSystem.hpp) initializes Vulkan and renders frames
+- [src/graphics/ShaderSystem.*](src/graphics/ShaderSystem.hpp) compiles Slang shaders to SPIR-V
+- [src/physics/PhysicsSystem.*](src/physics/PhysicsSystem.hpp) initializes Jolt and updates physics
+- [src/scheduling/TaskSchedulingSystem.*](src/scheduling/TaskSchedulingSystem.hpp) configures enkiTS

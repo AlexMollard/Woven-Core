@@ -1,0 +1,113 @@
+---
+title: What I Read (and Skipped)
+description: Resources that helped me expand my Vulkan 1.4 knowledge.
+---
+
+## What Actually Helped
+
+### Vulkan Specification
+
+**When I use it:** When validation says something is wrong and I need the exact rule. When I'm using a new 1.4 feature.
+
+**My approach:** Search for the specific function or extension. Read that section. Move on.
+
+### Vulkan 1.4 Release Notes and Extensions
+
+**Why I read this:** See what became core in 1.4. Understand what maintenance extensions do.
+
+**What I learned:** A lot of maintenance extensions just clean up the API. Some add real features. Need to know which is which.
+
+## Extension Documentation I Read
+
+### VK_EXT_shader_object
+
+**Why I read this:** Never used in previous engine. Needed to understand dynamic state requirements and shader object lifecycle.
+
+**What I learned:** Every pipeline state becomes explicit `vkCmdSet*` calls. A lot of state to set per frame.
+
+**My question:** Is this actually better than pipelines? Need to profile the CPU cost.
+
+### VK_EXT_mesh_shader
+
+**My experience:** Experimented before but never committed. This time reading for real usage patterns, not toy examples.
+
+**What helped:** NVIDIA and AMD blog posts on workgroup sizing, meshlet organization, when mesh shaders are worth it.
+
+**What I'm learning:** Not just the API (I know that), but the PATTERNS. How to structure culling. How to organize meshlets.
+
+## Tools I'm Using
+
+### RenderDoc
+
+**My experience:** Used before. Know how to capture frames and inspect state.
+
+**What I'm using it for:** Verifying shader object state. Checking mesh shader output. Confirming my mental model.
+
+### Nsight Graphics (NVIDIA)
+
+**My usage:** Plan to use for deeper profiling once rendering is more complex. Not needed yet for a triangle.
+
+**What I'll learn:** Where GPU time goes. Pipeline utilization. Bottleneck analysis.
+
+### Tracy
+
+**My status:** Integrated. Basic CPU profiling works. GPU zones not added yet.
+
+**Next step:** Add GPU timeline. See actual costs. Measure, don't guess.
+
+## What I Skipped
+
+### Beginner Vulkan Tutorials
+
+**Why I skip them:** I already did Vulkan 1.3. Don't need to relearn instance creation or what a command buffer is.
+
+**What I look for:** Advanced topics. GPU-driven patterns. Real engine techniques. Blog posts from 2024+ about real-world usage.
+
+**Reality:** Most Vulkan content is still beginner focused. I filter for advanced material.
+
+## Community Resources
+
+### /r/vulkan (Reddit)
+
+**How I use it:** Search for specific questions before asking. Most common questions are already answered.
+
+**What I learned:** Good for seeing how others solve problems. Lots of experienced Vulkan devs there.
+
+**Caveat:** Still see a lot of old render pass / pipeline advice. Filter for modern patterns.
+
+### Khronos Vulkan Discord
+
+**What it is:** Real-time help from Vulkan developers and API designers.
+
+**My experience:** Haven't needed to ask much yet. Validation and documentation have answered most questions.
+
+**When I'll use it:** If I hit something truly confusing or need clarification on spec behavior.
+
+## My Learning Strategy
+
+1. **Profile everything:** I know the API. Now I want to understand the COST. Tracy shows real numbers. Measure, don't guess.
+
+2. **Try features I've avoided:** Shader objects, mesh shaders - I've stuck with traditional paths before. Time to commit to modern patterns.
+
+3. **Break things intentionally:** Still do this. Best way to understand validation and what's actually required.
+
+4. **Read other engine code:** See how real engines (The Forge, bgfx, etc.) handle shader objects and mesh shaders in practice.
+
+5. **Expand scale:** I've done bindless at small scale. Now 16K slots. What changes at scale?
+
+## My Starting Point
+
+**What I bring:**
+- Previous Vulkan 1.3 renderer with dynamic rendering and bindless
+- GLSL experience (Slang syntax feels natural)
+- Understanding of synchronization2 and modern barriers  
+- Knowledge of what driver bugs feel like (timeline semaphores crash my PC)
+
+**What I'm expanding:**
+- Shader objects in real use (never committed before)
+- Mesh shaders as primary path (only experimented before)
+- Vulkan 1.4 features and baseline
+- Deeper performance understanding
+- GPU-driven patterns at scale
+
+**My goal:** Push beyond what I've done before. Not just relearning - expanding and refining.

@@ -1,0 +1,278 @@
+---
+title: Graphics System
+description: Design decisions and rationale behind the Vulkan rendering architecture.
+---
+
+## Philosophy
+
+This renderer is built around **modern Vulkan features** that eliminate legacy constraints and enable GPU-driven workflows. The goal is to learn and experiment with cutting-edge techniques, not to support the widest hardware range.
+
+[GraphicsSystem](src/graphics/GraphicsSystem.hpp) owns the Vulkan instance, device, swapchain, render targets, and per-frame command buffers.
+
+## Initialization Philosophy
+
+[GraphicsSystem::Initialize](src/graphics/GraphicsSystem.cpp#L18) follows a strict dependency order:
+
+1. **Volk first:** [Load Vulkan functions](src/graphics/GraphicsSystem.cpp#L26) before doing anything else
+2. **Instance before surface:** Need instance to query extensions and create surface
+3. **Surface before device:** Need surface for swapchain support queries during device selection
+4. **Physical device THEN logical device:** Query features/extensions on physical device, then create logical device with those features enabled
+5. **Device before VMA:** VMA needs the device to allocate memory
+6. **Queues before swapchain:** Need queue families to set up swapchain sharing mode
+7. **Swapchain before render targets:** Depth and HDR targets must match swapchain size
+8. **Command pools before sync:** Need pools to allocate command buffers
+9. **Everything before shaders:** Shaders need descriptor layouts and pipeline layout
+
+**Why this order matters:** Vulkan dependencies are rigid. Getting them wrong means validation errors or crashes.
+
+### Why Enable Validation Layers So Aggressively?
+
+**Debug features enabled:**
+- Best practices validation
+- GPU-assisted validation
+- Synchronization validation
+- Debug printf support
+
+**Why:** Vulkan's debug layers catch 90% of bugs before they become mysterious GPU hangs. [Aggressive validation](src/graphics/GraphicsSystem.cpp#L110) slows rendering but saves hours of debugging.
+
+**Learning benefit:** Validation teaches correct Vulkan usage. Every warning is a lesson.
+
+## Why Modern Vulkan?
+
+### Shader Objects over Graphics Pipelines
+
+**Why:** [Shader objects](src/graphics/GraphicsSystem.cpp#L1620) (VK_EXT_shader_object) eliminate the monolithic pipeline object model. Instead of creating thousands of pipeline permutations up front, you bind individual shader stages and set dynamic state per draw. This is **how modern engines should work**—full flexibility without pipeline explosion.
+
+**Trade-off:** Requires newer drivers. Not available on older GPUs. But this project targets learning modern techniques, not legacy support.
+
+### Dynamic Rendering over Render Passes
+
+**Why:** [Dynamic rendering](src/graphics/GraphicsSystem.cpp#L1609) (Vulkan 1.3 core) removes the render pass setup ceremony. You call `vkCmdBeginRendering`, specify attachments inline, and go. No pre-baked render pass objects or framebuffers.
+
+**Trade-off:** Slightly less driver optimization opportunity vs render passes, but the simplicity and flexibility win for a learning project.
+
+### Bindless Descriptors over Descriptor Sets per Material
+
+**Why:** [Bindless](src/graphics/GraphicsSystem.cpp#L1198) means one giant descriptor set with 16K texture slots. Materials just store indices. No descriptor set binding per draw. This scales to GPU-driven rendering where the GPU picks textures via buffer indices.
+
+**Required features:** `descriptorBindingPartiallyBound`, `runtimeDescriptorArray`, `updateAfterBind`.
+
+**Trade-off:** Wastes GPU descriptor space if you only have 10 textures. Doesn't matter for modern GPUs.
+
+The reason the trade-off doesn't matter is that modern GPUs have huge descriptor limits (e.g., 1 million descriptors) and the overhead of a large bindless set is negligible compared to the flexibility it provides. 
+
+### Mesh Shaders over Vertex/Index Buffers
+
+**Why:** [Mesh shaders](src/graphics/GraphicsSystem.cpp#L1455) (VK_EXT_mesh_shader) let the GPU cull and generate geometry in a compute-like shader, then emit triangles directly. Perfect for GPU-driven culling, LOD, and procedural geometry.
+
+**Current use:** The demo uses task + mesh shaders for a simple triangle to learn the API, even though it's overkill.
+
+**Trade-off:** Not widely supported yet (needs newer NVIDIA/AMD hardware). But essential for modern GPU-driven techniques.
+
+Modern engines such as Unreal Engine 5 and Unity are adopting mesh shaders for their flexibility and performance benefits, especially as they enable GPU-driven rendering techniques that are difficult or impossible with traditional vertex/index buffers.
+
+A good example would be the **Nanite** virtualized geometry system in Unreal Engine 5, which relies heavily on mesh shaders to efficiently render massive amounts of geometry with dynamic LOD and culling.
+
+Although Epic doesn't like to share this information much, you can see that they are using mesh shaders if you do a GPU capture of UE5 in RenderDoc and look at the draw calls.
+
+### Synchronization2 over Legacy Barriers
+
+**Why:** Synchronization2 (Vulkan 1.3 core) replaces the older barrier API with clearer, more explicit fields. Instead of guessing which old stage/access flags map to which pipeline stages, you specify exactly what happened before the barrier and what must happen after it.
+
+**What a barrier does (plain English):**
+- It tells the GPU: "Finish these writes/reads before you start these new reads/writes."
+- It can also **change an image layout** (e.g., from COLOR_ATTACHMENT to TRANSFER_SRC).
+
+**Old API pain:** The legacy barrier API uses `VkPipelineStageFlags` and `VkAccessFlags`. These are vague, easy to misuse, and lead to two common bugs:
+- **Over-sync:** You block the whole pipeline when you only needed to sync a small part. This hurts performance.
+- **Under-sync:** You miss a hazard and get flickering, GPU validation errors, or random corruption.
+
+**Why sync2 is better:**
+- `VkPipelineStageFlags2` and `VkAccessFlags2` are more precise and align better with modern hardware queues.
+- The data structures are unified under `VkDependencyInfo`, so you can see all barriers in one place.
+- It's easier to reason about because the names line up with what you are actually doing.
+
+**In WovenCore:** [TransitionImage](src/graphics/GraphicsSystem.cpp#L1730) uses `VkImageMemoryBarrier2` to move images between layouts (HDR render target and swapchain) and to enforce correct ordering. Example transitions you can find in the frame:
+- HDR render target: COLOR_ATTACHMENT_OPTIMAL → TRANSFER_SRC_OPTIMAL
+- Swapchain image: PRESENT_SRC_KHR → TRANSFER_DST_OPTIMAL → PRESENT_SRC_KHR
+
+**Benefit:** Fewer guessing games. Barriers are explicit, validation is happier, and performance is easier to optimize later.
+
+## Frame Loop Design
+
+### The Three-Phase Frame
+
+[RenderFrame](src/graphics/GraphicsSystem.cpp#L266) orchestrates:
+1. [BeginFrame](src/graphics/GraphicsSystem.cpp#L1366): Wait for GPU, acquire swapchain image, begin command buffer
+2. [RecordFrame](src/graphics/GraphicsSystem.cpp#L1534): All GPU commands (transitions, rendering, blit)
+3. [EndFrame](src/graphics/GraphicsSystem.cpp#L1769): Submit work, present to screen
+
+**Why separate?** Clear boundaries. BeginFrame handles sync, RecordFrame is pure GPU work, EndFrame handles submission. Easy to profile each phase with Tracy.
+
+### Why Wait on Fence in BeginFrame?
+
+**Why:** With 2 frames in flight, when we start frame N, frame N-2 might still be in flight. [Waiting on the fence](src/graphics/GraphicsSystem.cpp#L1376) ensures frame N-2 is done so we can safely reuse its command buffer and other resources.
+
+**Pattern:**
+```
+Frame 0: Submit with fence0
+Frame 1: Submit with fence1  
+Frame 2: Wait fence0, reuse frame0's resources
+```
+
+This is very common and hasn't changed since the dawn of Vulkan. You must wait for the GPU to finish with a frame's resources before reusing them.
+
+### Why Record All Commands In One Buffer?
+
+**Current approach:** [One primary command buffer](src/graphics/GraphicsSystem.cpp#L1404) per frame records everything: barriers, dynamic rendering, blit, transitions.
+
+**Why not secondary buffers?** Added complexity for no benefit at this scale. Secondary buffers shine when you have parallel recording across threads or need to reuse command chunks. For a learning project, one primary buffer is cleaner.
+
+The tl;dr is I just dont need another just yet.
+
+### Why HDR Render Target + Blit Instead of Direct Swapchain Rendering?
+
+**Why:** Rendering to an [HDR float target](src/graphics/GraphicsSystem.cpp#L949) (`R16G16B16A16_SFLOAT`) preserves lighting precision. Then [blit](src/graphics/GraphicsSystem.cpp#L1689) to the sRGB swapchain for display. This separates rendering from presentation formats.
+
+This is a must for any real renderer. You want HDR lighting and post-processing, and the swapchain format is often limited to 8-bit. Blitting allows you to do tone mapping and other effects before presenting.
+
+**Benefits:**
+- HDR lighting and tone mapping pipeline ready
+- Swapchain format changes don't affect rendering
+- Easy to add post-processing (bloom, tonemapping, TAA) before final blit
+
+**Trade-off:** Extra blit cost and memory. Negligible on modern GPUs, huge workflow win.
+
+### Why Per-Frame Command Pools?
+
+**Why:** Each frame has its own [command pool](src/graphics/GraphicsSystem.cpp#L1101) and command buffer. This avoids locks and lets frames record in parallel if needed.
+
+**Pattern:** Wait on frame N's fence → reset its command buffer → record → submit with fence.
+
+**Why a pool at all?** In Vulkan, command buffers are **allocated from a command pool**. The pool owns the memory backing the buffers and tracks which queue family they belong to. You cannot create a command buffer without a pool.
+
+**Why not one global pool?** You *can*, but it gets messy with multiple frames in flight:
+- Command buffers in a pool can only be reset when the GPU is done with **all** buffers from that pool (unless you use individual reset flags and are very careful).
+- If frame N-2 is still executing, you can't safely reset buffers from the same pool without stalling or creating hazards.
+
+**Why per-frame pools are simpler:** Each frame has its own pool, so when the frame's fence is signaled, you know **everything allocated from that pool is safe to reset**. No cross-frame dependencies, no partial resets.
+
+**What this buys you:**
+- Simple lifecycle: wait fence → reset pool/buffer → record → submit
+- Safe reset behavior without stalling unrelated frames
+- Easy path to multi-threaded command recording later (one pool per thread per frame)
+
+**Benefit:** Clean frame pacing and no contention between frames in flight.
+
+## Resource Management Decisions
+
+### Why Track Image Layouts Manually?
+
+**Why:** Vulkan needs to know the current layout of each image for barriers. [Tracking layouts](src/graphics/GraphicsSystem.hpp#L283) per swapchain image and for HDR/depth avoids undefined transitions and validation errors.
+
+**Pattern:** `TransitionImage` updates both the GPU layout (via barrier) and the tracked layout. This prevents bugs where you forget what layout an image is in.
+
+**"Can this be automatic?"** Some engines build a *render graph* that tracks resource usage and inserts transitions automatically. That is a great long-term goal, but it is extra machinery and easy to get wrong at first. For this project, the manual tracking is simple, explicit, and makes the hazards obvious while learning.
+
+**About the "universal" layout:** There is a layout called `VK_IMAGE_LAYOUT_GENERAL`. It can be used for many operations without changing layouts. However, it is not truly free:
+- It can be **slower** than using optimal layouts (COLOR_ATTACHMENT_OPTIMAL, TRANSFER_SRC, PRESENT, etc.).
+- Some operations still prefer or require specific layouts (presentation still needs PRESENT).
+- Using GENERAL everywhere often hides real hazards and makes performance tuning harder later.
+
+**Why I still use explicit layouts:** It keeps performance predictable and matches how modern engines work. Even if a render graph eventually automates this, it still needs correct layout states underneath.
+
+### Why VMA (Vulkan Memory Allocator)?
+
+**Why:** Manual Vulkan memory management is painful—you have to suballocate from large heaps, track offsets, bind memory to resources. [VMA](src/graphics/GraphicsSystem.cpp#L502) does this automatically with defragmentation and smart allocation strategies.
+
+**Usage:** `vmaCreateImage` allocates GPU memory and binds it in one call. Perfect for learning focus—let VMA handle the grunt work.
+
+### Why vk-bootstrap?
+
+**Why:** Setting up instance, physical device selection, logical device, and queues is 300+ lines of boilerplate. [vk-bootstrap](src/graphics/GraphicsSystem.cpp#L75) does it in 10 lines with sane defaults and extension checking.
+
+**Personal context:** I have done the full Vulkan setup flow many times before (both the C API and C++ wrappers). At this point it is repetitive, and I would rather spend time on rendering features than re-implement instance/device creation. vk-bootstrap keeps that part clean and readable.
+
+**Learning trade-off:** Less control, but I can iterate faster on rendering techniques instead of fighting instance creation.
+
+## Synchronization Strategy
+
+### Why Binary Semaphores + Fences?
+
+**Current approach:** Each frame uses:
+- **Acquire semaphore** for `vkAcquireNextImageKHR` → GPU waits for swapchain image
+- **Render semaphore** for render complete → present waits for this
+- **Fence** for CPU to wait until GPU finishes with this frame's resources
+
+**Why fences:** Essential for CPU/GPU pacing. Can't reuse a command buffer until the GPU is done with it. [Fence wait](src/graphics/GraphicsSystem.cpp#L1376) ensures this.
+
+### Why Timeline Semaphore?
+
+**Future plan:** [Timeline semaphores](src/graphics/GraphicsSystem.cpp#L1145) let you signal/wait on specific integer values without fence overhead. Perfect for multi-queue work (compute, transfer, graphics) and async resource uploads.
+
+**Current state:** Not currently used. I tried using them, but my drivers would hang the whole PC. Until that is stable, I keep binary semaphores + fences.
+
+## Tracy GPU Profiling Integration
+
+**Why Tracy?** Real-time GPU timeline visualization. See exactly where GPU time goes: barriers, rendering, blits.
+
+**Setup:** [Create Tracy Vulkan context](src/graphics/GraphicsSystem.cpp#L539) with calibrated timestamps. Requires its own command buffer and pool.
+
+**Usage:** Call [TracyVkCollect](src/graphics/GraphicsSystem.cpp#L279) each frame to pull timing data. Wrap GPU work with `TracyVkZone` in command buffers (not done yet).
+
+## Resize Strategy
+
+**Problem:** Window resize invalidates the swapchain. New size → new swapchain → recreate all size-dependent resources.
+
+**Solution:** [HandleResize](src/graphics/GraphicsSystem.cpp#L1831) sets a flag. Next frame, [RecreateSwapchain](src/graphics/GraphicsSystem.cpp#L1023) waits for GPU idle, destroys old swapchain/depth/HDR, creates new ones.
+
+**Why wait for idle?** Can't destroy resources while GPU might be using them. Simple and safe.
+
+**Better approach (not implemented):** Track resource usage with timeline semaphores, destroy when safe without full idle. Disabled for now because timeline semaphore submission caused driver hangs on my hardware.
+
+## What's Next?
+
+This renderer is a foundation for GPU-driven techniques:
+- **Compute light culling** (forward+ tiled shading)
+- **GPU frustum culling** in task shaders before mesh shading
+- **Indirect drawing** with GPU-written draw commands
+- **Mesh LOD selection** in task shaders
+- **Tonemapping + post-processing** before the swapchain blit
+
+Each of these builds on the modern pipeline: bindless, compute, mesh shaders, dynamic rendering.
+
+## Why Slang for Shaders?
+
+**Decision:** Use [Slang](src/graphics/ShaderSystem.cpp#L110) to compile shaders at runtime to SPIR-V, instead of offline GLSL → SPIR-V with glslangValidator.
+
+**Why:**
+- **HLSL-like syntax:** Different from GLSL, but readable; I mainly came from GLSL and still found it approachable
+- **Runtime compilation:** Change shader, rerun app—no build step
+- **Module system:** Import shared code cleanly
+- **Better error messages:** Slang's diagnostics beat glslang's cryptic errors
+
+**Why Slang specifically (big picture):** Modern graphics has too many shader languages (GLSL, HLSL, MSL, WGSL, SPIR-V). Slang aims to be a **single modern front-end** that can target multiple back ends and keep shader code consistent across APIs. It is the closest thing to a "unified" shader language stack.
+
+**Trade-off:** Runtime compile cost on startup. Doesn't matter for a learning project. Could add shader caching later.
+
+**Current use:** Triangle demo shaders in [shaders/triangle.slang](shaders/triangle.slang) compile to task/mesh/fragment shader objects.
+
+## Shader Hot Reload (Planned)
+
+**Goal:** Edit a shader at runtime, recompile it, and swap it in without restarting the app. This is essential for rapid iteration and debugging.
+
+**Why this matters:**
+- Fix bugs or tweak lighting without a full rebuild
+- Validate shader changes immediately with live frame feedback
+- Keep iteration loop tight for learning
+
+**Planned approach:**
+- Add a manual hot reload trigger (button or keybind)
+- In the future, expose a small ImGui debug window with a "Recompile Shaders" button
+- Recompile via `ShaderSystem` on demand
+- Replace the old `VkShaderEXT` with the new one safely
+- Rebind on the next frame
+
+**Safety note:** Must ensure the old shader is not in use by the GPU when destroyed. Likely use a per-frame deferred delete queue tied to the frame fence.
+
+**Note:** I have not done this in the past for vulkan so im excited to learn how to do it properly. It is a common feature in game engines and will be a great learning experience to implement it from scratch.

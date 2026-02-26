@@ -1,0 +1,145 @@
+---
+title: Systems Overview
+description: Why each system exists and what design decisions it embodies.
+---
+
+## Systems
+
+**Note:** The only system with a complete, deep-dive doc right now is GraphicsSystem. The others are early-stage and will be expanded later.
+
+### Application
+
+**Purpose:** Own all systems, coordinate lifecycle, run the frame loop.
+
+**Why it exists:** Every engine needs a root object. [Application](src/core/Application.hpp) is the entry point that SDL callbacks talk to. It's the conductor, not a performer.
+
+**Key methods:**
+- [Init](src/core/Application.cpp#L17): Initialize all systems in dependency order
+- [Update](src/core/Application.cpp#L38): Run one frame of game logic + rendering
+- [Shutdown](src/core/Application.cpp#L61): Clean up in reverse order
+
+**Design choice:** Application doesn't do game logic—it just orchestrates subsystems. Game logic will live in a future GameSystem or World object.
+
+**Status:** Placeholder doc for now. Will expand once gameplay or world systems exist.
+
+### WindowSystem
+
+**Purpose:** [Create and own the SDL window](src/window/WindowSystem.cpp#L13).
+
+**Why separate?** Graphics needs a window handle, but window creation is platform-specific (SDL abstracts it). Separating window from graphics keeps graphics focused on Vulkan, not platform windowing APIs.
+
+**Responsibilities:**
+- Initialize SDL video subsystem
+- Create window with Vulkan support
+- (Future) Handle window events like resize, minimize, focus
+
+**Current state:** Very minimal. Just creates a 1920x1080 window. Resize handling lives in GraphicsSystem for now.
+
+**Status:** Placeholder doc for now. Will expand when window/input handling grows.
+
+### GraphicsSystem
+
+**Purpose:** Own all Vulkan resources and render each frame.
+
+**Why so large?** Graphics is inherently complex. Instance, device, swapchain, command buffers, sync primitives, render targets, shaders—all live here. Splitting into smaller classes would add indirection for no clarity gain at this stage.
+
+**Core decisions:**
+- [Volk](src/graphics/volk.cpp) for Vulkan function loading (avoids linking directly to Vulkan loader)
+- [vk-bootstrap](src/graphics/GraphicsSystem.cpp#L75) for instance/device setup (avoids 300 lines of boilerplate)
+- [VMA](src/graphics/VulkanMemoryAllocator.cpp) for memory allocation (avoids manual heap management)
+- [Shader objects](src/graphics/GraphicsSystem.cpp#L1620) instead of pipelines (modern, flexible)
+- [Dynamic rendering](src/graphics/GraphicsSystem.cpp#L1609) instead of render passes (simpler)
+- [Bindless descriptors](src/graphics/GraphicsSystem.cpp#L1198) (scalable, GPU-driven ready)
+- [Tracy GPU profiling](src/graphics/GraphicsSystem.cpp#L539) (measure everything)
+
+**See:** [Graphics System deep dive](./graphics/) for detailed rationale.
+
+### ShaderSystem
+
+**Purpose:** Compile Slang shader code to SPIR-V and create shader objects at runtime.
+
+**Why Slang?** HLSL-like syntax, better error messages than GLSL, clean module system. See [Graphics System doc](./graphics/#why-slang-for-shaders) for full rationale.
+
+**Why runtime compilation?** Instant iteration. Change shader, rerun app. No separate build step.
+
+**Design:** [ShaderSystem](src/graphics/ShaderSystem.cpp#L110) owns the Slang session and search paths. It exposes:
+- `CreateShaderObject`: Compile source → SPIR-V → VkShaderEXT
+- `DestroyShader`: Clean up shader object
+
+**Initialization:** Requires device and descriptor set layout (shaders are linked to descriptor layout at creation).
+
+**Trade-off:** Startup cost of compilation. Future optimization: cache compiled SPIR-V to disk.
+
+**Status:** Brief summary only. Full details live in the Graphics System doc.
+
+### PhysicsSystem
+
+**Purpose:** Manage Jolt Physics for simulation.
+
+**Current state:** [Initializes Jolt's allocator](src/physics/PhysicsSystem.cpp#L15). Simulation update is a stub.
+
+**Why Jolt?** Modern, multi-threaded, double-precision physics. Used in AAA games. Better than old bullet/PhysX for learning modern physics.
+
+**Future:** Add rigid bodies, broadphase, narrowphase, constraints. Integrate with task system for parallel island solving.
+
+**Design choice:** Physics owns its world. Graphics just queries transforms for rendering.
+
+**Status:** Placeholder doc. Will expand once simulation exists.
+
+### TaskSchedulingSystem
+
+**Purpose:** Provide a work-stealing task scheduler for parallel work.
+
+**Why enkiTS?** Lightweight, lock-free, proven in production. Perfect for CPU-side parallelism (physics jobs, mesh processing, etc.).
+
+**Current state:** [Initializes with default config](src/scheduling/TaskSchedulingSystem.cpp#L16) (one thread per CPU core minus one).
+
+**Usage pattern:**
+```cpp
+auto* scheduler = app->GetTaskSchedulingSystem()->GetScheduler();
+scheduler->AddTaskSetToPipe(myTask);
+scheduler->WaitforAll();
+```
+
+**Future:** Use for physics broad-phase, mesh LOD processing, async resource loading.
+
+**Why not std::async?** No control over thread pool, poor cache locality. enkiTS gives you priorities, pinned tasks, and fine-grained control.
+
+**Status:** Placeholder doc. Will expand once tasks are used outside startup.
+
+## Design Patterns and Trade-offs
+
+### Why Not ECS (Entity-Component-System)?
+
+**Decision:** Simple system ownership model instead of ECS (like EnTT or Flecs).
+
+**Why:**
+- ECS shines for games with thousands of entities and complex queries
+- This project focuses on rendering and physics techniques, not gameplay scale
+- Systems owning their data directly is simpler to debug and reason about
+- Can add ECS later if gameplay demands it
+
+**Trade-off:** Less flexible for complex entity relationships. Acceptable for a learning project.
+
+**Note:** I most likely will add a ECS eventually but I tend to get distracted with these in the past and I want to focus on graphics and physics first. ECS can be added later when there is a need for it.
+
+### Why Pointers Between Systems?
+
+**Current approach:** Application owns systems. Systems access each other via `app->GetGraphicsSystem()` or by passing pointers during init.
+
+**Alternative (rejected):** Global singletons. Hard to test, unclear ownership, I actually have done this in the past and it was fine but I found I was calling into get instances from random places and it got messy. I want to avoid that this time.
+
+**Alternative (rejected):** Dependency injection container. Over-engineered for this scale. Very C#-style, not as common in C++.
+
+**Alternative (rejected):** Service pattern with registration and lookup. Adds complexity without much benefit at this stage. I like this approach and have done it once before but it can get complicated and I want to keep it simple for now.
+
+**Chosen approach:** Explicit dependencies. If PhysicsSystem needs TaskScheduler, pass it in Init or store a pointer. (You want it, have it. No magic service locator or global state.)
+
+### Order of Operations
+
+**Frame order:**
+1. Physics simulation (WIP)
+2. Task scheduling (parallel work) (WIP)
+3. Graphics profiler collect
+4. Render frame
+

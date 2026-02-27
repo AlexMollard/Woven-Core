@@ -98,9 +98,17 @@ CPMAddPackage(
     OPTIONS "FASTGLTF_ENABLE_TESTS OFF"
 )
 
-# Ensure fastgltf target exists
+# Ensure fastgltf target exists and has proper include directories
 if(NOT TARGET fastgltf::fastgltf AND TARGET fastgltf)
     add_library(fastgltf::fastgltf ALIAS fastgltf)
+endif()
+
+# Explicitly set fastgltf include directories for the alias
+if(TARGET fastgltf::fastgltf)
+    get_target_property(fastgltf_INCLUDE_DIRS fastgltf::fastgltf INTERFACE_INCLUDE_DIRECTORIES)
+    if(NOT fastgltf_INCLUDE_DIRS)
+        target_include_directories(fastgltf::fastgltf INTERFACE ${fastgltf_SOURCE_DIR}/include)
+    endif()
 endif()
 
 # 6. enkiTS (Tasks)

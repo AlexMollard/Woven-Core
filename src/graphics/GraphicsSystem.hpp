@@ -332,6 +332,33 @@ private:
 	bool m_ImGuiInitialized = false;
 	struct ImDrawData* m_ImGuiDrawData = nullptr;
 
+	// Debug visualization state
+	struct DebugState
+	{
+		// Rendering controls
+		bool enableWireframe = false;
+		bool enableCullFaceBackFace = true;
+		float clearColorR = 0.1f;
+		float clearColorG = 0.1f;
+		float clearColorB = 0.1f;
+		float clearColorA = 1.0f;
+
+		// Frame pacing and vsync
+		bool enableVsync = true;
+		bool enableFpsCap = true;
+		float targetFps = 60.0f;
+		float vSyncModifier = 1.0f;
+
+		// Performance tracking
+		int frameTimeWindow = 60;        // Number of frames to average for FPS
+		std::vector<float> frameTimings; // Rolling frame times in ms
+		uint64_t frameCounter = 0;
+
+		// Frame timing for pacing
+		double lastFrameTime = 0.0;
+		double frameStartTime = 0.0;
+	} m_DebugState;
+
 	// Pipeline infrastructure
 	VkPipelineLayout m_GlobalPipelineLayout = VK_NULL_HANDLE;
 	VkPipelineCache m_PipelineCache = VK_NULL_HANDLE;

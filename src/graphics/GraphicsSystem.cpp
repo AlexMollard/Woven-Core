@@ -4,11 +4,15 @@
 #include <volk.h>
 
 // Vulkan stuff must be included after Volk
+#include <algorithm>
 #include <backends/imgui_impl_sdl3.h>
 #include <backends/imgui_impl_vulkan.h>
+#include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <imgui.h>
 #include <SDL3/SDL_vulkan.h>
+#include <thread>
 #include <tracy/TracyVulkan.hpp>
 #include <VkBootstrap.h>
 
@@ -20,6 +24,12 @@
 
 GraphicsSystem::GraphicsSystem()
 {
+	// Initialize debug state with defaults
+	m_DebugState.clearColorR = 0.02f;
+	m_DebugState.clearColorG = 0.02f;
+	m_DebugState.clearColorB = 0.04f;
+	m_DebugState.clearColorA = 1.0f;
+	m_DebugState.frameTimings.reserve(300); // Pre-allocate for smooth operation
 }
 
 GraphicsSystem::~GraphicsSystem()
@@ -218,6 +228,32 @@ void GraphicsSystem::UpdateProfiler()
 bool GraphicsSystem::RenderFrame(float timeSeconds)
 {
 	ZoneScopedN("GraphicsSystem::RenderFrame");
+
+	// Frame pacing - cap FPS if enabled
+	if (m_DebugState.enableFpsCap || m_DebugState.enableVsync)
+	{
+		using Clock = std::chrono::high_resolution_clock;
+		static auto frameStartTime = Clock::now();
+
+		if (m_DebugState.frameCounter > 0) // Skip first frame
+		{
+			auto now = Clock::now();
+			double elapsedMs = std::chrono::duration<double, std::milli>(now - frameStartTime).count();
+
+			// Calculate target frame time in milliseconds
+			float effectiveTargetFps = m_DebugState.targetFps * m_DebugState.vSyncModifier;
+			double targetFrameMs = 1000.0 / static_cast<double>(effectiveTargetFps);
+
+			// Sleep if we're ahead of schedule
+			if (elapsedMs < targetFrameMs)
+			{
+				double sleepTimeMs = targetFrameMs - elapsedMs;
+				std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(sleepTimeMs));
+			}
+		}
+		frameStartTime = Clock::now();
+	}
+
 	if (m_ImGuiInitialized)
 	{
 		BeginImGuiFrame();
@@ -345,9 +381,401 @@ void GraphicsSystem::BeginImGuiFrame()
 	ImGui_ImplSDL3_NewFrame();
 	ImGui::NewFrame();
 
-	ImGui::Begin("Debug");
-	ImGui::Text("WovenCore - ImGui");
-	ImGui::Text("Frame %u", m_CurrentFrameIndex);
+	// Collect frame timing - always add current delta time
+	float deltaTimeMs = ImGui::GetIO().DeltaTime * 1000.0f; // Convert to ms
+	m_DebugState.frameTimings.push_back(deltaTimeMs);
+	if (m_DebugState.frameTimings.size() > static_cast<size_t>(m_DebugState.frameTimeWindow))
+	{
+		m_DebugState.frameTimings.erase(m_DebugState.frameTimings.begin());
+	}
+
+	// Calculate frame time statistics
+	float avgFrameTime = 0.0f;
+	float minFrameTime = FLT_MAX;
+	float maxFrameTime = 0.0f;
+	if (!m_DebugState.frameTimings.empty())
+	{
+		for (float time: m_DebugState.frameTimings)
+		{
+			avgFrameTime += time;
+			minFrameTime = std::min(minFrameTime, time);
+			maxFrameTime = std::max(maxFrameTime, time);
+		}
+		avgFrameTime /= static_cast<float>(m_DebugState.frameTimings.size());
+	}
+
+	// Calculate frame time standard deviation (for stability metric)
+	float frameTimeVariance = 0.0f;
+	if (!m_DebugState.frameTimings.empty())
+	{
+		for (float time: m_DebugState.frameTimings)
+		{
+			float diff = time - avgFrameTime;
+			frameTimeVariance += diff * diff;
+		}
+		frameTimeVariance /= static_cast<float>(m_DebugState.frameTimings.size());
+	}
+	float frameTimeStdDev = std::sqrt(frameTimeVariance);
+
+	// Calculate percentiles
+	float percentile1 = 0.0f, percentile5 = 0.0f, percentile95 = 0.0f, percentile99 = 0.0f;
+	if (!m_DebugState.frameTimings.empty())
+	{
+		std::vector<float> sortedTimings = m_DebugState.frameTimings;
+		std::sort(sortedTimings.begin(), sortedTimings.end());
+
+		size_t size = sortedTimings.size();
+		percentile1 = sortedTimings[size / 100 > 0 ? size / 100 : 0];
+		percentile5 = sortedTimings[(size * 5) / 100];
+		percentile95 = sortedTimings[(size * 95) / 100];
+		percentile99 = sortedTimings[size - 1 - (size / 100 > 0 ? size / 100 : 0)];
+	}
+
+	float avgFps = avgFrameTime > 0.0f ? 1000.0f / avgFrameTime : 0.0f;
+
+	// Main Debug Window
+	ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(600, 800), ImGuiCond_FirstUseEver);
+	ImGui::Begin("Vulkan Debug", nullptr, ImGuiWindowFlags_None);
+
+	// Tab bar for different debug sections
+	if (ImGui::BeginTabBar("DebugTabs", ImGuiTabBarFlags_None))
+	{
+		// === PERFORMANCE TAB ===
+		if (ImGui::BeginTabItem("Performance"))
+		{
+			// === Frame Counter & Rate ===
+			ImGui::SeparatorText("Frame Metrics");
+			ImGui::Text("Frame Number:         %llu", m_DebugState.frameCounter++);
+			ImGui::Text("Current Frame Index:  %u / %u", m_CurrentFrameIndex, MAX_FRAMES_IN_FLIGHT);
+			ImGui::Spacing();
+
+			// === FPS Display with Color Coding ===
+			ImGui::Text("Instant FPS:          %.1f", ImGui::GetIO().Framerate);
+			ImGui::SameLine();
+			ImGui::TextDisabled("(ImGui calculated)");
+
+			ImGui::Text("Average FPS:          %.1f", avgFps);
+			ImGui::SameLine();
+			// Color based on performance
+			if (avgFps >= 59.0f)
+				ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "[EXCELLENT]");
+			else if (avgFps >= 30.0f)
+				ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.2f, 1.0f), "[GOOD]");
+			else
+				ImGui::TextColored(ImVec4(0.8f, 0.2f, 0.2f, 1.0f), "[LOW]");
+
+			ImGui::Spacing();
+			ImGui::SeparatorText("Frame Timing (ms)");
+
+			// === Detailed Frame Time Stats ===
+			ImGui::Text("Current:              %.3f ms", deltaTimeMs);
+			ImGui::Text("Average:              %.3f ms", avgFrameTime);
+			ImGui::Text("Min/Max:              %.3f / %.3f ms", minFrameTime, maxFrameTime);
+			ImGui::Text("Std Deviation:        %.3f ms", frameTimeStdDev);
+			ImGui::Spacing();
+
+			// === Percentile Distribution ===
+			ImGui::SeparatorText("Percentile Distribution");
+			ImGui::Text("1st Percentile:       %.3f ms", percentile1);
+			ImGui::Text("5th Percentile:       %.3f ms", percentile5);
+			ImGui::Text("95th Percentile:      %.3f ms", percentile95);
+			ImGui::Text("99th Percentile:      %.3f ms", percentile99);
+
+			// Performance warning - always reserve space to prevent window jitter
+			ImGui::Spacing();
+			if (maxFrameTime > avgFrameTime * 1.5f)
+			{
+				ImGui::TextColored(ImVec4(0.8f, 0.4f, 0.0f, 1.0f), "⚠ Frame time variance detected");
+				ImGui::TextDisabled("  Max frame %.1f%% above average", ((maxFrameTime / avgFrameTime - 1.0f) * 100.0f));
+			}
+			else
+			{
+				// Reserve space for warning even when not showing (prevents window jitter)
+				ImGui::TextColored(ImVec4(0.8f, 0.4f, 0.0f, 0.0f), "⚠ Frame time variance detected");
+				ImGui::TextDisabled("");
+			}
+
+			ImGui::Spacing();
+			ImGui::SeparatorText("Analysis Settings");
+
+			// Window size adjustment
+			int oldWindow = m_DebugState.frameTimeWindow;
+			ImGui::SliderInt("Frame Window Size##perf", &m_DebugState.frameTimeWindow, 10, 300);
+			ImGui::SameLine();
+			ImGui::TextDisabled("(%d frames)", m_DebugState.frameTimeWindow);
+			if (m_DebugState.frameTimeWindow != oldWindow)
+			{
+				ImGui::TextDisabled("Currently collecting: %zu / %d frames", m_DebugState.frameTimings.size(), m_DebugState.frameTimeWindow);
+			}
+
+			ImGui::Spacing();
+
+			// Frame time graph with better scaling
+			float maxGraphValue = std::max(33.0f, maxFrameTime * 1.1f); // Auto-scale based on data
+			ImGui::PlotLines("##FrameTimeGraph", m_DebugState.frameTimings.data(), static_cast<int>(m_DebugState.frameTimings.size()), 0, "Frame Times (ms)", 0.0f, maxGraphValue, ImVec2(520, 120));
+
+			// 60 FPS and 30 FPS reference lines info
+			ImGui::Text("Reference: 60 FPS = 16.67 ms, 30 FPS = 33.33 ms");
+
+			ImGui::Spacing();
+			ImGui::SeparatorText("Frame Pacing Controls");
+
+			// VSync toggle
+			bool vsyncChanged = ImGui::Checkbox("Enable VSync", &m_DebugState.enableVsync);
+			if (vsyncChanged)
+			{
+				ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "✓ VSync %s", m_DebugState.enableVsync ? "Enabled" : "Disabled");
+			}
+
+			// FPS Cap toggle
+			bool fpscapChanged = ImGui::Checkbox("Enable FPS Cap", &m_DebugState.enableFpsCap);
+			if (fpscapChanged)
+			{
+				ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "✓ FPS Cap %s", m_DebugState.enableFpsCap ? "Enabled" : "Disabled");
+			}
+
+			ImGui::Spacing();
+
+			// Target FPS slider
+			ImGui::SliderFloat("Target FPS##cap", &m_DebugState.targetFps, 24.0f, 240.0f);
+			ImGui::TextDisabled("  Requested: %.1f FPS (%.3f ms per frame)", m_DebugState.targetFps, 1000.0f / m_DebugState.targetFps);
+
+			// vSync modifier
+			ImGui::SliderFloat("Frame Rate Modifier", &m_DebugState.vSyncModifier, 0.5f, 2.0f);
+			float effectiveFps = m_DebugState.targetFps * m_DebugState.vSyncModifier;
+			ImGui::TextDisabled("  Effective: %.1f FPS (%.3f ms per frame)", effectiveFps, 1000.0f / effectiveFps);
+
+			// Status indicators
+			ImGui::Spacing();
+			ImGui::SeparatorText("Status");
+			ImGui::Text("VSync:                %s", m_DebugState.enableVsync ? "Active" : "Inactive");
+			ImGui::Text("FPS Cap:              %s", m_DebugState.enableFpsCap ? "Active" : "Inactive");
+
+			if (m_DebugState.enableVsync || m_DebugState.enableFpsCap)
+			{
+				ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.5f, 1.0f), "Frame pacing: %.1f FPS target", effectiveFps);
+			}
+
+			ImGui::EndTabItem();
+		}
+
+		// === DEVICE INFO TAB ===
+		if (ImGui::BeginTabItem("Device Info"))
+		{
+			if (ImGui::CollapsingHeader("Physical Device", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				ImGui::Text("Device Name:      %s", m_VkbPhysicalDevice.name);
+				ImGui::Text("Driver Version:   %u", m_VkbPhysicalDevice.properties.driverVersion);
+				ImGui::Text("Vendor ID:        0x%X", m_VkbPhysicalDevice.properties.vendorID);
+				ImGui::Text("Device ID:        0x%X", m_VkbPhysicalDevice.properties.deviceID);
+
+				const char* deviceTypeStr = "Unknown";
+				switch (m_VkbPhysicalDevice.properties.deviceType)
+				{
+					case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+						deviceTypeStr = "Discrete GPU";
+						break;
+					case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+						deviceTypeStr = "Integrated GPU";
+						break;
+					case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+						deviceTypeStr = "Virtual GPU";
+						break;
+					case VK_PHYSICAL_DEVICE_TYPE_CPU:
+						deviceTypeStr = "CPU";
+						break;
+					default:
+						deviceTypeStr = "Other";
+				}
+				ImGui::Text("Device Type:      %s", deviceTypeStr);
+			}
+
+			if (ImGui::CollapsingHeader("API Version", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				uint32_t apiVersion = m_VkbInstance.instance_version;
+				ImGui::Text("Instance Version: %u.%u.%u", VK_VERSION_MAJOR(apiVersion), VK_VERSION_MINOR(apiVersion), VK_VERSION_PATCH(apiVersion));
+
+				uint32_t deviceApiVersion = m_VkbPhysicalDevice.properties.apiVersion;
+				ImGui::Text("Device Version:   %u.%u.%u", VK_VERSION_MAJOR(deviceApiVersion), VK_VERSION_MINOR(deviceApiVersion), VK_VERSION_PATCH(deviceApiVersion));
+			}
+
+			ImGui::EndTabItem();
+		}
+
+		// === SWAPCHAIN TAB ===
+		if (ImGui::BeginTabItem("Swapchain"))
+		{
+			if (ImGui::CollapsingHeader("Swapchain Properties", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				ImGui::Text("Image Count:      %u", GetSwapchainImageCount());
+				ImGui::Text("Extent:           %u x %u", m_SwapchainExtent.width, m_SwapchainExtent.height);
+				ImGui::Text("Out of Date:      %s", m_SwapchainOutOfDate ? "YES" : "NO");
+
+				const char* formatStr = "Unknown";
+				if (m_SwapchainImageFormat == VK_FORMAT_B8G8R8A8_SRGB)
+					formatStr = "B8G8R8A8_SRGB";
+				else if (m_SwapchainImageFormat == VK_FORMAT_R8G8B8A8_SRGB)
+					formatStr = "R8G8B8A8_SRGB";
+
+				ImGui::Text("Color Format:     %s", formatStr);
+			}
+
+			if (ImGui::CollapsingHeader("Depth Resources", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				const char* depthFormatStr = "Unknown";
+				if (m_DepthFormat == VK_FORMAT_D32_SFLOAT)
+					depthFormatStr = "D32_SFLOAT";
+				else if (m_DepthFormat == VK_FORMAT_D24_UNORM_S8_UINT)
+					depthFormatStr = "D24_UNORM_S8_UINT";
+
+				ImGui::Text("Depth Format:     %s", depthFormatStr);
+			}
+
+			if (ImGui::CollapsingHeader("HDR Target", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				ImGui::Text("HDR Format:       R16G16B16A16_SFLOAT");
+				ImGui::Text("Status:           %s", (m_HDRRenderTarget != VK_NULL_HANDLE) ? "Active" : "Inactive");
+			}
+
+			ImGui::EndTabItem();
+		}
+
+		// === MEMORY TAB ===
+		if (ImGui::BeginTabItem("Memory"))
+		{
+			if (ImGui::CollapsingHeader("VMA Allocator", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				ImGui::Text("Allocator Handle:  0x%p", (void*) m_VmaAllocator);
+				ImGui::Text("Status:            %s", (m_VmaAllocator != VK_NULL_HANDLE) ? "Active" : "Inactive");
+				ImGui::Text("\nDetailed VMA stats require vmaCalculateStats()");
+				ImGui::Text("which may have performance impact.");
+			}
+
+			ImGui::EndTabItem();
+		}
+
+		// === QUEUES TAB ===
+		if (ImGui::BeginTabItem("Queues"))
+		{
+			if (ImGui::CollapsingHeader("Graphics Queue", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				ImGui::Text("Queue Family:     %u", m_VkbDevice.get_queue_index(vkb::QueueType::graphics).value());
+				ImGui::Text("Queue Handle:     0x%p", (void*) m_GraphicsQueue);
+				ImGui::Text("Status:           %s", (m_GraphicsQueue != VK_NULL_HANDLE) ? "Active" : "Inactive");
+			}
+
+			if (ImGui::CollapsingHeader("Present Queue", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				ImGui::Text("Queue Family:     %u", m_VkbDevice.get_queue_index(vkb::QueueType::present).value());
+				ImGui::Text("Queue Handle:     0x%p", (void*) m_PresentQueue);
+				ImGui::Text("Status:           %s", (m_PresentQueue != VK_NULL_HANDLE) ? "Active" : "Inactive");
+			}
+
+			ImGui::EndTabItem();
+		}
+
+		// === FEATURES TAB ===
+		if (ImGui::BeginTabItem("Features"))
+		{
+			if (ImGui::CollapsingHeader("Extension Support", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				ImGui::Text("%s - %s", "Mesh Shaders", m_SupportsMeshShaders ? "Enabled" : "Disabled");
+				ImGui::Text("%s - %s", "Descriptor Buffer", m_SupportsDescriptorBuffer ? "Enabled" : "Disabled");
+				ImGui::Text("%s - %s", "Fragment Shading Rate", m_SupportsFragmentShadingRate ? "Enabled" : "Disabled");
+				ImGui::Text("%s - %s", "Push Descriptors", m_SupportsPushDescriptor ? "Enabled" : "Disabled");
+				ImGui::Text("%s - %s", "Shader Objects", m_SupportsShaderObjects ? "Enabled" : "Disabled");
+			}
+
+			ImGui::EndTabItem();
+		}
+
+		// === RENDERING TAB ===
+		if (ImGui::BeginTabItem("Rendering"))
+		{
+			if (ImGui::CollapsingHeader("Render State Controls", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				ImGui::Checkbox("Enable Wireframe", &m_DebugState.enableWireframe);
+				ImGui::SameLine();
+				ImGui::TextColored(m_DebugState.enableWireframe ? ImVec4(0.2f, 0.8f, 0.2f, 1.0f) : ImVec4(0.5f, 0.5f, 0.5f, 1.0f), m_DebugState.enableWireframe ? "●" : "○");
+				ImGui::TextDisabled("(Applied in real-time)");
+
+				ImGui::Checkbox("Cull Back Faces", &m_DebugState.enableCullFaceBackFace);
+				ImGui::SameLine();
+				ImGui::TextColored(m_DebugState.enableCullFaceBackFace ? ImVec4(0.2f, 0.8f, 0.2f, 1.0f) : ImVec4(0.5f, 0.5f, 0.5f, 1.0f), m_DebugState.enableCullFaceBackFace ? "●" : "○");
+				ImGui::TextDisabled("(Applied in real-time)");
+			}
+
+			if (ImGui::CollapsingHeader("Clear Color", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				ImGui::ColorEdit4("Clear Color##main", &m_DebugState.clearColorR);
+				ImGui::TextDisabled("(Changes applied in real-time)");
+			}
+
+			ImGui::EndTabItem();
+		}
+
+		// === VALIDATION TAB ===
+		if (ImGui::BeginTabItem("Validation"))
+		{
+			if (ImGui::CollapsingHeader("Validation Status", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+#ifndef NDEBUG
+				ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.5f, 1.0f), "Debug build - Validation enabled");
+				ImGui::Text("Layers set at initialization:");
+				ImGui::BulletText("GPU-Assisted Validation");
+				ImGui::BulletText("Synchronization Validation");
+				ImGui::BulletText("Best Practices");
+				ImGui::BulletText("Debug Printf");
+#else
+				ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.2f, 1.0f), "Release build - Validation disabled");
+#endif
+			}
+
+			ImGui::EndTabItem();
+		}
+
+		// === COMMAND BUFFERS TAB ===
+		if (ImGui::BeginTabItem("Command Buffers"))
+		{
+			if (ImGui::CollapsingHeader("Current Frame", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				FrameData& frame = GetCurrentFrame();
+				ImGui::Text("Command Pool:     0x%p", (void*) frame.commandPool);
+				ImGui::Text("Command Buffer:   0x%p", (void*) frame.commandBuffer);
+				ImGui::Text("Render Fence:     0x%p", (void*) frame.renderFence);
+				ImGui::Text("Status:           %s", (frame.commandBuffer != VK_NULL_HANDLE) ? "Valid" : "Invalid");
+			}
+
+			if (ImGui::CollapsingHeader("All Frames", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+				{
+					bool isCurrentFrame = (i == m_CurrentFrameIndex);
+					ImGui::PushID(static_cast<int>(i));
+					const char* currentStr = isCurrentFrame ? " (Current)" : "";
+					char frameLabelBuffer[64];
+					snprintf(frameLabelBuffer, sizeof(frameLabelBuffer), "Frame %u%s", i, currentStr);
+					if (ImGui::TreeNode(frameLabelBuffer))
+					{
+						ImGui::Text("Command Buffer: 0x%p", (void*) m_Frames[i].commandBuffer);
+						ImGui::Text("Render Fence:   0x%p", (void*) m_Frames[i].renderFence);
+						ImGui::TreePop();
+					}
+					ImGui::PopID();
+				}
+			}
+
+			ImGui::EndTabItem();
+		}
+
+		ImGui::EndTabBar();
+	}
+
+	// Main footer with quick stats
+	ImGui::Separator();
+	ImGui::Text("Swapchain: %ux%u | Frame: %u / %u | FPS: %.1f | Time: %.3f ms", m_SwapchainExtent.width, m_SwapchainExtent.height, m_CurrentFrameIndex, MAX_FRAMES_IN_FLIGHT, avgFps, avgFrameTime);
+
 	ImGui::End();
 
 	ImGui::Render();
@@ -1774,7 +2202,12 @@ void GraphicsSystem::RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, float
 {
 	ZoneScopedN("RecordFrame");
 	const VkExtent2D extent = GetSwapchainExtent();
-	const VkClearValue colorClear = { .color = { { 0.02f, 0.02f, 0.04f, 1.0f } } };
+
+	// Use debug state clear color if update was requested, otherwise use default
+	const VkClearColorValue debugClearColor = {
+		.float32 = { m_DebugState.clearColorR, m_DebugState.clearColorG, m_DebugState.clearColorB, m_DebugState.clearColorA }
+	};
+	const VkClearValue colorClear = { .color = debugClearColor };
 	const VkClearValue depthClear = {
 		.depthStencil = { 1.0f, 0 }
 	};
@@ -1959,7 +2392,11 @@ void GraphicsSystem::SetDynamicState(VkCommandBuffer cmd, VkExtent2D extent)
 	vkCmdSetScissor(cmd, 0, 1, &scissor);
 
 	vkCmdSetRasterizerDiscardEnable(cmd, VK_FALSE);
-	vkCmdSetCullMode(cmd, VK_CULL_MODE_NONE);
+
+	// Apply face culling based on debug state
+	VkCullModeFlags cullMode = m_DebugState.enableCullFaceBackFace ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+	vkCmdSetCullMode(cmd, cullMode);
+
 	vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
 	vkCmdSetPrimitiveTopology(cmd, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
 	vkCmdSetDepthTestEnable(cmd, VK_FALSE);
@@ -1969,7 +2406,9 @@ void GraphicsSystem::SetDynamicState(VkCommandBuffer cmd, VkExtent2D extent)
 	vkCmdSetStencilTestEnable(cmd, VK_FALSE);
 	vkCmdSetLineWidth(cmd, 1.0f);
 
-	vkCmdSetPolygonModeEXT(cmd, VK_POLYGON_MODE_FILL);
+	// Apply polygon mode based on debug state (wireframe vs solid)
+	VkPolygonMode polygonMode = m_DebugState.enableWireframe ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
+	vkCmdSetPolygonModeEXT(cmd, polygonMode);
 	vkCmdSetRasterizationSamplesEXT(cmd, VK_SAMPLE_COUNT_1_BIT);
 	vkCmdSetAlphaToCoverageEnableEXT(cmd, VK_FALSE);
 

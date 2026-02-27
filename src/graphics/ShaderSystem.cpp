@@ -6,6 +6,7 @@
 #include <slang-com-ptr.h>
 #include <slang.h>
 
+#include "core/FileSystem.hpp"
 #include "core/Logger.hpp"
 #include "graphics/ShaderSystem.hpp"
 
@@ -78,23 +79,7 @@ bool ShaderSystem::Initialize(VkDevice device, VkDescriptorSetLayout bindlessLay
 		return false;
 	}
 
-	std::filesystem::path shaderDir = std::filesystem::current_path() / "shaders";
-
-	if (!std::filesystem::exists(shaderDir))
-	{
-		std::filesystem::path probe = shaderDir.parent_path();
-		for (int i = 0; i < 5 && !probe.empty(); ++i)
-		{
-			std::filesystem::path candidate = probe / "shaders";
-			if (std::filesystem::exists(candidate))
-			{
-				shaderDir = candidate;
-				break;
-			}
-			probe = probe.parent_path();
-		}
-	}
-
+	const std::filesystem::path shaderDir = FileSystem::GetShadersDir();
 	if (!std::filesystem::exists(shaderDir))
 	{
 		Logger::Warning("Shader directory not found: %s", shaderDir.string().c_str());

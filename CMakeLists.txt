@@ -184,6 +184,32 @@ if(TARGET slang AND NOT TARGET slang::slang)
     add_library(slang::slang ALIAS slang)
 endif()
 
+# 11. ImGui (Debug UI)
+CPMAddPackage(
+    NAME imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG master
+)
+
+if(imgui_ADDED)
+    set(IMGUI_SOURCES
+        ${imgui_SOURCE_DIR}/imgui.cpp
+        ${imgui_SOURCE_DIR}/imgui_draw.cpp
+        ${imgui_SOURCE_DIR}/imgui_tables.cpp
+        ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+    )
+
+    add_library(imgui STATIC ${IMGUI_SOURCES})
+    target_include_directories(imgui PUBLIC
+        ${imgui_SOURCE_DIR}
+        ${imgui_SOURCE_DIR}/backends
+    )
+    target_compile_definitions(imgui PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK)
+    target_link_libraries(imgui PUBLIC SDL3::SDL3-static Volk::volk Vulkan::Vulkan)
+endif()
+
 # --- Executable Target ---
 # Glob source files (CONFIGURE_DEPENDS ensures CMake reconfigures when files are added/removed)
 file(GLOB_RECURSE WOVENCORE_SOURCES CONFIGURE_DEPENDS
@@ -241,6 +267,7 @@ target_link_libraries(WovenCore PRIVATE
     fastgltf::fastgltf
     enkiTS::enkiTS
     Jolt
+    imgui
     TracyClient
     Vulkan::Vulkan
 )

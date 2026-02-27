@@ -4,10 +4,15 @@
 #include <volk.h>
 
 // Vulkan stuff must be included after Volk
+#include <backends/imgui_impl_sdl3.h>
+#include <backends/imgui_impl_vulkan.h>
+#include <filesystem>
+#include <imgui.h>
 #include <SDL3/SDL_vulkan.h>
 #include <tracy/TracyVulkan.hpp>
 #include <VkBootstrap.h>
 
+#include "core/FileSystem.hpp"
 #include "core/Logger.hpp"
 #include "graphics/RenderConstants.hpp"
 #include "graphics/ShaderSystem.hpp"
@@ -20,6 +25,102 @@ GraphicsSystem::GraphicsSystem()
 GraphicsSystem::~GraphicsSystem()
 {
 }
+
+namespace
+{
+	void SetupImGuiStyle()
+	{
+		ImGuiStyle& style = ImGui::GetStyle();
+		ImVec4* colors = style.Colors;
+
+		const ImVec4 bgDark = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
+		const ImVec4 bgMid = ImVec4(0.15f, 0.15f, 0.15f, 1.00f);
+		const ImVec4 bgLight = ImVec4(0.20f, 0.20f, 0.20f, 1.00f);
+		const ImVec4 accent = ImVec4(0.10f, 0.60f, 0.30f, 1.00f);
+		const ImVec4 accentLight = ImVec4(0.20f, 0.70f, 0.40f, 1.00f);
+		const ImVec4 textPrimary = ImVec4(0.95f, 0.95f, 0.95f, 1.00f);
+		const ImVec4 textSecondary = ImVec4(0.70f, 0.70f, 0.70f, 1.00f);
+
+		colors[ImGuiCol_Text] = textPrimary;
+		colors[ImGuiCol_TextDisabled] = textSecondary;
+		colors[ImGuiCol_WindowBg] = bgDark;
+		colors[ImGuiCol_ChildBg] = bgMid;
+		colors[ImGuiCol_PopupBg] = bgMid;
+		colors[ImGuiCol_Border] = ImVec4(0.25f, 0.25f, 0.25f, 0.50f);
+		colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+		colors[ImGuiCol_FrameBg] = bgLight;
+		colors[ImGuiCol_FrameBgHovered] = accent;
+		colors[ImGuiCol_FrameBgActive] = accentLight;
+		colors[ImGuiCol_TitleBg] = bgMid;
+		colors[ImGuiCol_TitleBgActive] = accent;
+		colors[ImGuiCol_TitleBgCollapsed] = bgDark;
+		colors[ImGuiCol_MenuBarBg] = bgMid;
+		colors[ImGuiCol_ScrollbarBg] = bgDark;
+		colors[ImGuiCol_ScrollbarGrab] = bgLight;
+		colors[ImGuiCol_ScrollbarGrabHovered] = accent;
+		colors[ImGuiCol_ScrollbarGrabActive] = accentLight;
+		colors[ImGuiCol_CheckMark] = accentLight;
+		colors[ImGuiCol_SliderGrab] = accent;
+		colors[ImGuiCol_SliderGrabActive] = accentLight;
+		colors[ImGuiCol_Button] = bgLight;
+		colors[ImGuiCol_ButtonHovered] = accent;
+		colors[ImGuiCol_ButtonActive] = accentLight;
+		colors[ImGuiCol_Header] = bgLight;
+		colors[ImGuiCol_HeaderHovered] = accent;
+		colors[ImGuiCol_HeaderActive] = accentLight;
+		colors[ImGuiCol_Separator] = ImVec4(0.25f, 0.25f, 0.25f, 1.00f);
+		colors[ImGuiCol_SeparatorHovered] = accent;
+		colors[ImGuiCol_SeparatorActive] = accentLight;
+		colors[ImGuiCol_ResizeGrip] = bgLight;
+		colors[ImGuiCol_ResizeGripHovered] = accent;
+		colors[ImGuiCol_ResizeGripActive] = accentLight;
+		colors[ImGuiCol_Tab] = bgMid;
+		colors[ImGuiCol_TabHovered] = accent;
+		colors[ImGuiCol_TabActive] = accentLight;
+		colors[ImGuiCol_TabUnfocused] = bgDark;
+		colors[ImGuiCol_TabUnfocusedActive] = bgLight;
+		colors[ImGuiCol_TabSelectedOverline] = bgLight;
+		colors[ImGuiCol_PlotLines] = accent;
+		colors[ImGuiCol_PlotLinesHovered] = accentLight;
+		colors[ImGuiCol_PlotHistogram] = accent;
+		colors[ImGuiCol_PlotHistogramHovered] = accentLight;
+		colors[ImGuiCol_TextSelectedBg] = ImVec4(0.20f, 0.80f, 0.50f, 0.35f);
+		colors[ImGuiCol_DragDropTarget] = ImVec4(0.20f, 0.80f, 0.50f, 0.90f);
+		colors[ImGuiCol_NavHighlight] = accent;
+		colors[ImGuiCol_NavWindowingHighlight] = ImVec4(0.20f, 0.80f, 0.50f, 0.90f);
+		colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
+		colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.35f);
+
+		style.WindowPadding = ImVec2(10, 10);
+		style.FramePadding = ImVec2(8, 4);
+		style.ItemSpacing = ImVec2(10, 8);
+		style.ItemInnerSpacing = ImVec2(8, 6);
+		style.IndentSpacing = 25.0f;
+		style.ScrollbarSize = 12.0f;
+		style.GrabMinSize = 12.0f;
+
+		style.WindowBorderSize = 1.0f;
+		style.ChildBorderSize = 1.0f;
+		style.PopupBorderSize = 1.0f;
+		style.FrameBorderSize = 0.0f;
+
+		style.WindowRounding = 6.0f;
+		style.ChildRounding = 6.0f;
+		style.FrameRounding = 4.0f;
+		style.PopupRounding = 6.0f;
+		style.ScrollbarRounding = 6.0f;
+		style.GrabRounding = 4.0f;
+		style.TabRounding = 4.0f;
+
+		ImGuiIO& io = ImGui::GetIO();
+		const std::filesystem::path fontPath = FileSystem::GetFontPath("JetBrainsMono-Regular.ttf");
+		Logger::Info("Loading ImGui font from: %s", fontPath.string().c_str());
+		if (std::filesystem::exists(fontPath))
+		{
+			io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(), 16.0f);
+		}
+	}
+} // namespace
 
 bool GraphicsSystem::Initialize(SDL_Window* window)
 {
@@ -76,6 +177,9 @@ bool GraphicsSystem::Initialize(SDL_Window* window)
 	if (!CreatePipelineInfrastructure())
 		return false;
 
+	if (!InitializeImGui(window))
+		return false;
+
 	m_ShaderSystem = std::make_unique<ShaderSystem>();
 	const VkPushConstantRange pushConstants{ VK_SHADER_STAGE_ALL, 0, sizeof(PushConstants) };
 	if (!m_ShaderSystem->Initialize(m_VkbDevice.device, m_BindlessDescriptorSetLayout, pushConstants))
@@ -92,6 +196,7 @@ void GraphicsSystem::Shutdown()
 	ZoneScopedN("GraphicsSystem::Shutdown");
 
 	DestroyShaders();
+	ShutdownImGui();
 
 	if (m_ShaderSystem)
 	{
@@ -103,6 +208,7 @@ void GraphicsSystem::Shutdown()
 
 void GraphicsSystem::UpdateProfiler()
 {
+	ZoneScopedN("GraphicsSystem::UpdateProfiler");
 	if (m_TracyContext)
 	{
 		TracyVkCollect(m_TracyContext, m_TracyCommandBuffer);
@@ -111,6 +217,12 @@ void GraphicsSystem::UpdateProfiler()
 
 bool GraphicsSystem::RenderFrame(float timeSeconds)
 {
+	ZoneScopedN("GraphicsSystem::RenderFrame");
+	if (m_ImGuiInitialized)
+	{
+		BeginImGuiFrame();
+	}
+
 	uint32_t imageIndex = 0;
 	if (!BeginFrame(imageIndex))
 	{
@@ -127,6 +239,130 @@ bool GraphicsSystem::RenderFrame(float timeSeconds)
 
 	RecordFrame(frame.commandBuffer, imageIndex, timeSeconds);
 	return EndFrame(imageIndex);
+}
+
+bool GraphicsSystem::InitializeImGui(SDL_Window* window)
+{
+	ZoneScopedN("GraphicsSystem::InitializeImGui");
+	IMGUI_CHECKVERSION();
+	ImGui::CreateContext();
+	SetupImGuiStyle();
+	ImGuiIO& io = ImGui::GetIO();
+	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+	if (!ImGui_ImplSDL3_InitForVulkan(window))
+	{
+		Logger::Error("Failed to initialize ImGui SDL3 backend");
+		return false;
+	}
+
+	const VkDescriptorPoolSize poolSizes[] = {
+		{		        VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+		{		  VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
+		{		  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
+		{   VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000 },
+		{   VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000 },
+		{         VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000 },
+		{         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000 },
+		{       VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 },
+	};
+
+	VkDescriptorPoolCreateInfo poolInfo{};
+	poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+	poolInfo.maxSets = 1000 * static_cast<uint32_t>(std::size(poolSizes));
+	poolInfo.poolSizeCount = static_cast<uint32_t>(std::size(poolSizes));
+	poolInfo.pPoolSizes = poolSizes;
+
+	if (vkCreateDescriptorPool(m_VkbDevice.device, &poolInfo, nullptr, &m_ImGuiDescriptorPool) != VK_SUCCESS)
+	{
+		Logger::Error("Failed to create ImGui descriptor pool");
+		return false;
+	}
+
+	ImGui_ImplVulkan_InitInfo initInfo{};
+	initInfo.ApiVersion = m_VkbInstance.instance_version;
+	initInfo.Instance = m_VkbInstance.instance;
+	initInfo.PhysicalDevice = m_VkbPhysicalDevice.physical_device;
+	initInfo.Device = m_VkbDevice.device;
+	initInfo.QueueFamily = m_VkbDevice.get_queue_index(vkb::QueueType::graphics).value();
+	initInfo.Queue = m_GraphicsQueue;
+	initInfo.DescriptorPool = m_ImGuiDescriptorPool;
+	initInfo.MinImageCount = MAX_FRAMES_IN_FLIGHT;
+	initInfo.ImageCount = GetSwapchainImageCount();
+	initInfo.MinAllocationSize = 1024 * 1024;
+	initInfo.UseDynamicRendering = true;
+	initInfo.PipelineInfoMain.RenderPass = VK_NULL_HANDLE;
+	initInfo.PipelineInfoMain.Subpass = 0;
+	initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+
+	VkPipelineRenderingCreateInfo pipelineRenderingInfo{};
+	pipelineRenderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+	pipelineRenderingInfo.colorAttachmentCount = 1;
+	pipelineRenderingInfo.pColorAttachmentFormats = &m_HDRFormat;
+	pipelineRenderingInfo.depthAttachmentFormat = m_DepthFormat;
+	initInfo.PipelineInfoMain.PipelineRenderingCreateInfo = pipelineRenderingInfo;
+
+	if (!ImGui_ImplVulkan_Init(&initInfo))
+	{
+		Logger::Error("Failed to initialize ImGui Vulkan backend");
+		return false;
+	}
+
+	m_ImGuiInitialized = true;
+	return true;
+}
+
+void GraphicsSystem::ShutdownImGui()
+{
+	ZoneScopedN("GraphicsSystem::ShutdownImGui");
+	if (!m_ImGuiInitialized)
+	{
+		return;
+	}
+
+	ImGui_ImplVulkan_Shutdown();
+	ImGui_ImplSDL3_Shutdown();
+	ImGui::DestroyContext();
+
+	if (m_ImGuiDescriptorPool != VK_NULL_HANDLE)
+	{
+		vkDestroyDescriptorPool(m_VkbDevice.device, m_ImGuiDescriptorPool, nullptr);
+		m_ImGuiDescriptorPool = VK_NULL_HANDLE;
+	}
+
+	m_ImGuiDrawData = nullptr;
+	m_ImGuiInitialized = false;
+}
+
+void GraphicsSystem::BeginImGuiFrame()
+{
+	ZoneScopedN("GraphicsSystem::BeginImGuiFrame");
+	ImGui_ImplVulkan_NewFrame();
+	ImGui_ImplSDL3_NewFrame();
+	ImGui::NewFrame();
+
+	ImGui::Begin("Debug");
+	ImGui::Text("WovenCore - ImGui");
+	ImGui::Text("Frame %u", m_CurrentFrameIndex);
+	ImGui::End();
+
+	ImGui::Render();
+	m_ImGuiDrawData = ImGui::GetDrawData();
+}
+
+void GraphicsSystem::RenderImGui(VkCommandBuffer cmd)
+{
+	ZoneScopedN("GraphicsSystem::RenderImGui");
+	if (!m_ImGuiInitialized || !m_ImGuiDrawData)
+	{
+		return;
+	}
+
+	ImGui_ImplVulkan_RenderDrawData(m_ImGuiDrawData, cmd);
 }
 
 // --- Vulkan Initialization Steps ---
@@ -1477,6 +1713,7 @@ void GraphicsSystem::HandleResize(SDL_Window* window)
 
 bool GraphicsSystem::CreateShaders()
 {
+	ZoneScopedN("CreateShaders");
 	if (!m_SupportsMeshShaders)
 	{
 		Logger::Error("Mesh shaders not supported on this device");
@@ -1520,6 +1757,7 @@ bool GraphicsSystem::CreateShaders()
 
 void GraphicsSystem::DestroyShaders()
 {
+	ZoneScopedN("DestroyShaders");
 	if (m_ShaderSystem)
 	{
 		m_ShaderSystem->DestroyShader(m_TaskShader);
@@ -1534,6 +1772,7 @@ void GraphicsSystem::DestroyShaders()
 
 void GraphicsSystem::RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, float timeSeconds)
 {
+	ZoneScopedN("RecordFrame");
 	const VkExtent2D extent = GetSwapchainExtent();
 	const VkClearValue colorClear = { .color = { { 0.02f, 0.02f, 0.04f, 1.0f } } };
 	const VkClearValue depthClear = {
@@ -1619,6 +1858,8 @@ void GraphicsSystem::RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, float
 	// Dispatch mesh tasks: 1 task workgroup to generate 1 mesh workgroup
 	vkCmdDrawMeshTasksEXT(cmd, 1, 1, 1);
 
+	RenderImGui(cmd);
+
 	vkCmdEndRendering(cmd);
 
 	TransitionImage(cmd, GetHDRRenderTarget(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
@@ -1672,6 +1913,7 @@ void GraphicsSystem::RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, float
 
 void GraphicsSystem::TransitionImage(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess, VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess, VkImageAspectFlags aspectMask)
 {
+	ZoneScopedN("TransitionImage");
 	if (oldLayout == newLayout)
 	{
 		return;
@@ -1702,6 +1944,7 @@ void GraphicsSystem::TransitionImage(VkCommandBuffer cmd, VkImage image, VkImage
 
 void GraphicsSystem::SetDynamicState(VkCommandBuffer cmd, VkExtent2D extent)
 {
+	ZoneScopedN("SetDynamicState");
 	VkViewport viewport{};
 	viewport.x = 0.0f;
 	viewport.y = 0.0f;

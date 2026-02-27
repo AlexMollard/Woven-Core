@@ -10,6 +10,7 @@ public:
 
 	bool Initialize();
 	void Shutdown();
+	void ProcessEvent(const SDL_Event& event);
 
 	SDL_Window* GetWindow() const
 	{

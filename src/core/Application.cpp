@@ -76,6 +76,14 @@ void Application::Shutdown()
 	Logger::Shutdown();
 }
 
+void Application::HandleEvent(const SDL_Event& event)
+{
+	if (m_Window)
+	{
+		m_Window->ProcessEvent(event);
+	}
+}
+
 SDL_Window* Application::GetWindow() const
 {
 	return m_Window->GetWindow();

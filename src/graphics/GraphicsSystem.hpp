@@ -90,6 +90,12 @@ public:
 	// Rendering
 	bool RenderFrame(float timeSeconds);
 
+	// ImGui
+	bool InitializeImGui(SDL_Window* window);
+	void ShutdownImGui();
+	void BeginImGuiFrame();
+	void RenderImGui(VkCommandBuffer cmd);
+
 	// Frame management
 	uint32_t GetCurrentFrameIndex() const
 	{
@@ -320,6 +326,11 @@ private:
 	VkDescriptorPool m_BindlessDescriptorPool = VK_NULL_HANDLE;
 	VkDescriptorSetLayout m_BindlessDescriptorSetLayout = VK_NULL_HANDLE;
 	VkDescriptorSet m_BindlessDescriptorSet = VK_NULL_HANDLE;
+
+	// ImGui
+	VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
+	bool m_ImGuiInitialized = false;
+	struct ImDrawData* m_ImGuiDrawData = nullptr;
 
 	// Pipeline infrastructure
 	VkPipelineLayout m_GlobalPipelineLayout = VK_NULL_HANDLE;

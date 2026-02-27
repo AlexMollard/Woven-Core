@@ -23,6 +23,7 @@ This project is for my learning and experimentation with modern graphics program
 | **Physics** | **Jolt Physics** | Multi-threaded, double-precision physics engine used in AAA. |
 | **Tasks** | **enkiTS** | Lightweight, lock-free task scheduler for job-based parallelism. |
 | **Profiling** | **Tracy v0.13.1** | Real-time frame profiler with GPU support and memory tracking. |
+| **UI/Debug** | **Dear ImGui** | Simple in-engine debug UI for live tweaking and inspection. |
 | **Math** | **GLM** | Configured for Left-Handed, Zero-to-One depth (Vulkan standard). |
 | **Build System** | **CMake + CPM** | Package manager included; no manual git submodules required. |
 

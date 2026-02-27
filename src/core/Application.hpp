@@ -18,6 +18,7 @@ public:
 	bool Init();
 	void Update();
 	void Shutdown();
+	void HandleEvent(const SDL_Event& event);
 
 	// Accessors
 	SDL_Window* GetWindow() const;

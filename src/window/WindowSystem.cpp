@@ -3,6 +3,9 @@
 #include "core/Logger.hpp"
 #include "WindowSystem.hpp"
 
+#include <imgui.h>
+#include <backends/imgui_impl_sdl3.h>
+
 WindowSystem::WindowSystem()
 {
 }
@@ -43,4 +46,13 @@ void WindowSystem::Shutdown()
 	}
 
 	SDL_Quit();
+}
+
+void WindowSystem::ProcessEvent(const SDL_Event& event)
+{
+	ZoneScopedN("WindowSystem::ProcessEvent");
+	if (ImGui::GetCurrentContext() != nullptr)
+	{
+		ImGui_ImplSDL3_ProcessEvent(&event);
+	}
 }

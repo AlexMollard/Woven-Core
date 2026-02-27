@@ -37,6 +37,7 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
 {
 	ZoneScoped; // Trace event handling
 	auto* app = static_cast<Application*>(appstate);
+	app->HandleEvent(*event);
 
 	if (event->type == SDL_EVENT_QUIT)
 	{

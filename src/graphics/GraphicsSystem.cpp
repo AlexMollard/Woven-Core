@@ -565,9 +565,34 @@ void GraphicsSystem::BeginImGuiFrame()
 		{
 			if (ImGui::CollapsingHeader("Physical Device", ImGuiTreeNodeFlags_DefaultOpen))
 			{
-				ImGui::Text("Device Name:      %s", m_VkbPhysicalDevice.name);
+				ImGui::Text("Device Name:      %s", m_VkbPhysicalDevice.properties.deviceName);
 				ImGui::Text("Driver Version:   %u", m_VkbPhysicalDevice.properties.driverVersion);
-				ImGui::Text("Vendor ID:        0x%X", m_VkbPhysicalDevice.properties.vendorID);
+				
+				const char* vendorName = "Unknown";
+				switch (m_VkbPhysicalDevice.properties.vendorID)
+				{
+					case 0x1002:
+						vendorName = "AMD";
+						break;
+					case 0x10DE:
+						vendorName = "NVIDIA";
+						break;
+					case 0x8086:
+						vendorName = "Intel";
+						break;
+					case 0x13B5:
+						vendorName = "ARM";
+						break;
+					case 0x5143:
+						vendorName = "Qualcomm";
+						break;
+					case 0x1010:
+						vendorName = "ImgTec";
+						break;
+					default:
+						vendorName = "Unknown";
+				}
+				ImGui::Text("Vendor ID:        0x%X (%s)", m_VkbPhysicalDevice.properties.vendorID, vendorName);
 				ImGui::Text("Device ID:        0x%X", m_VkbPhysicalDevice.properties.deviceID);
 
 				const char* deviceTypeStr = "Unknown";
